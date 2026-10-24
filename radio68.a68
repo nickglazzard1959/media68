@@ -1,0 +1,313 @@
+COMMENT
+Choose and play an internet radio stream with mpv
+=================================================
+
+Given a directory full of .m3u files (mapping station names to URLs),
+open one of those files, pick an entry from it and start playing the
+associated stream (URL) with the mpv program.
+
+This program revealed a bit of a mystery (at least with BBC Radio 3 streams).
+On one machine, these run out of cache and EOF after some random period
+(typically a few minutes). On another machine, they never do this, but play
+perfectly 'forever'. Same Debian 12 OS, same mpv version (0.35.1), different
+behaviour. The machine with problems even has more resources (e.g. 32GB RAM vs. 16GB).
+This has been programmed around (mpv is restarted unless it is explicity exited by
+the user). Very odd though.
+
+Installation:
+For this program to work correctly (or at all), the script mpv-run.sh
+must be copied to somewhere on your PATH (e.g. /usr/local/bin) and
+input.conf must be copied to ~/.config/mpv/input.conf. This is needed
+to distinguish between mpv exiting because the user asked it to with q
+and it exiting for other reasons.
+
+This program is most conveniently run from the script file radio68.sh.
+The script starts this program in a new detached terminal window with
+suitable arguments supplied
+.
+This uses environment variables set in select_vars.sh. The contents of 
+this should be edited as needed and it should be sourced before radio68.sh
+is used.
+
+Nick Glazzard, 2026.
+--------------------
+COMMENT
+
+PR heap=128M PR
+
+PR read "utility.a68" PR
+PR read "dictionaries.a68" PR
+PR read "arg_parser.a68" PR
+
+# Try to avoid Emacs highlighting going mad because of hashes. #
+STRING ahash = REPR(35);
+STRING acomment = ahash + " ";
+STRING extm3u = ahash + "EXTM3U";
+STRING extinf = ahash + "EXTINF";
+
+# Parse a .m3u file wich maps 'station names' to stream URLs. #
+PROC parse_m3u = (STRING m3ufilename) []STRINGPAIR:
+(
+   FLEX [1:0]STRINGPAIR retval;
+   FILE fin;
+
+   # Open the .m3u file. #
+   INT open_status := open_file(m3ufilename, "r+", fin);
+   IF open_status /= 0
+   THEN
+      # Open failed. #
+      print_os_error("parse_m3u(): open failed", open_status)
+
+   ELSE
+      # Open succeeded. Prepare to read the file to EOF. #
+      BOOL eof := FALSE;
+      PROC at_eof = (REF FILE afin) BOOL: ( eof := TRUE );
+      on file end(fin, at_eof);
+      STRING input_line;
+      BOOL first_line := TRUE;
+      INT line_no := 0;
+
+      # Create a list of strings to hold info temporarily. #
+      REF STRING_LIST channels_list := STRING_LIST_INIT LOC STRING_LIST;
+      STRING new_entry := "";
+
+      # Read all lines in the file. #
+      DO
+         get(fin, (input_line, new line)); (eof | file_end);
+         line_no +:= 1;
+         input_line := trim(input_line);
+
+         # Skip comment lines and empty lines completely. #
+         IF (ELEMS input_line > 0) ANDF (NOT begins_with(input_line, acomment))
+         THEN
+
+            # The first non-comment line must identify the file type. #
+            IF first_line
+            THEN
+               (NOT begins_with(input_line, extm3u) |
+                     put(stand error, ("parse_m3u(): Line: ", wint(line_no),
+                                       " Expected ",extm3u," in first non-comment line, but not found. Giving up.", new line));
+                     done
+               );
+               first_line := FALSE
+
+            # Not first line. #
+            ELSE 
+               IF begins_with(input_line, extinf)
+               THEN
+                  # Info line. #
+                  (new_entry /= "" |
+                        put(stand error, ("parse_m3u(): Line: ", wint(line_no),
+                                          " Two consecutive EXTINF with no URL. Giving up.", new line));
+                        file_end
+                  );
+                  FLEX [1:0]STRING name_parts := split_string(input_line, ",");
+                  (ELEMS name_parts < 2 |
+                        put(stand error, ("parse_m3u(): Line: ", wint(line_no),
+                                          " No comma found in EXTINF line. Giving up.", new line));
+                        file_end
+                  );
+                  new_entry := name_parts[2] + "="
+               ELIF begins_with(input_line, extm3u)
+               THEN
+                  # Superfluous EXTM3U. Just ignore it. #
+                  SKIP
+               ELSE
+                  # URL line. #
+                  new_entry +:= input_line;
+                  channels_list +:= new_entry;
+                  new_entry := ""
+               FI # URL line. #
+            FI # Not first line. #
+         FI # Line not empty and not comment. #
+      OD; # Over lines in file. #
+
+      file_end:
+         close(fin);
+
+      # Convert string list to STRINGPAIRS. #
+      (
+         [ELEMS channels_list]STRINGPAIR result;
+         INT i_result := 1;
+         REF STRING_LIST_ELEMENT definition := FIRST channels_list;
+         WHILE definition ISNT nil_sle
+         DO
+            result[i_result] := splitfirst(GET definition, "=");
+            definition := NEXT channels_list;
+            i_result +:= 1
+         OD;
+         retval := result
+      )
+      
+   FI; # File open OK. #
+
+   done:
+   retval
+);
+
+# Choose an entry from a .m3u file. Process (play) it. #
+PROC select_from_m3u_file = (STRING channel_file) VOID:
+(
+   STRINGPAIR path_name := splitpath(channel_file);
+   STRINGPAIR name_ext := splitext(last OF path_name);
+   FLEX [1:0]STRINGPAIR channels :=  parse_m3u(channel_file);
+
+   # Get selections forever, unless explicitly exited.  #
+   WHILE TRUE
+   DO
+      clear_ansi_screen;
+      print_underlined("File: " + first OF name_ext);
+      FOR i TO ELEMS channels
+      DO
+         print((wint(i)," : ", first OF channels[i], new line))
+      OD;
+
+      STRING selection;
+      INT selint := 0;
+      INT newpos;
+      BOOL got_selection := FALSE;
+      WHILE NOT got_selection
+      DO
+         print(("--> "));
+         read((selection, new line));
+
+         (selection /= "" |
+               (selection = "q" | stop);    # Quit immediately. #
+               (selection = "u" | return);  # Up one level. Select a new .m3u file. #
+               IF selection = "h"
+               THEN
+                  clear_ansi_screen;
+                  print_underlined("HELP");
+                  print(("<integer> : file to process.", new line));
+                  print(("u : move up and select another .m3u file.", new line));
+                  print(("q : quit (exit) immediately.", new line));
+                  print(("h : display this help.", new line));
+
+                  print_underlined("File: " + first OF name_ext);
+                  FOR i TO ELEMS channels
+                  DO
+                     print((wint(i)," : ", first OF channels[i], new line))
+                  OD
+
+               ELSE
+                  VOID(ifromc(selection, selint, 1, newpos));
+                  (selint < 1 OR selint > ELEMS channels |
+                        print(("Selection out of range. Try again, or h for help.", new line)); sleep_void(2) |
+                           got_selection := TRUE
+                  )
+               FI # help or numeric. #
+         ) # selection string is not empty. #
+      OD; # while not got a valid selection or command.  #
+
+      # Process the stream. These streams should never end (in theory). So mpv should never exit. #
+      # Unless the user explicitly requests it with a q command to mpv. mpv-run.sh detects if q has #
+      # been used by creating a flag file (needs ~/.config/mpv/input.conf to contain 'q quit 4'). #
+      # If mpv does exit for any reason other than q, restart it.  #
+      print(("***** ", last OF channels[selint], " *****", new line));
+      STRING runcmd := do_what+" '"+last OF channels[selint]+"'";
+      WHILE TRUE
+      DO
+         (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)); return);
+         (file is regular(abort_flag_file) | break2)
+      OD; # Restart mpv if it has not been explicitly exited. #
+      break2:
+      SKIP
+   OD; # Loop getting selections forever. #
+
+   return:
+   SKIP
+);
+
+# Select an item from a list by index number. #
+PROC select_from_indexed_list = (STRING page_title, []STRING items) INT:
+(
+   clear_ansi_screen;
+   print_underlined(page_title);
+   FOR i TO ELEMS items
+   DO
+      print((wint(i)," : ", items[i], new line))
+   OD;
+
+   STRING selection;
+   INT selint := 0;
+   INT newpos;
+   BOOL got_selection := FALSE;
+   WHILE NOT got_selection
+   DO
+      print(("--> "));
+      read((selection, new line));
+
+      (selection /= "" |
+            (selection = "q" | stop);    # Quit immediately. #
+            (selection = "u" | return);  # Up one level. If at Level 1, exit. #
+            IF selection = "h"
+            THEN
+               clear_ansi_screen;
+               print_underlined("HELP");
+               print(("<integer> : file to process.", new line));
+               print(("u : move up and select another .m3u file.", new line));
+               print(("q : quit (exit) immediately.", new line));
+               print(("h : display this help.", new line));
+
+               print_underlined(page_title);
+               FOR i TO ELEMS items
+               DO
+                  print((wint(i)," : ", items[i], new line))
+               OD
+
+            ELSE
+               VOID(ifromc(selection, selint, 1, newpos));
+               (selint < 1 OR selint > ELEMS items |
+                     print(("Selection out of range. Try again, or h for help.", new line)); sleep_void(2) |
+                        got_selection := TRUE
+               )
+            FI # help or numeric. #
+      ) # selection string is not empty. #
+  OD; # while not got a valid selection or command.  #
+
+  return:
+  selint
+);
+
+# ============ #
+# MAIN PROGRAM #
+# ============ #
+
+STRING title = "Select a stream from an .m3u File and play it";
+print_std_title( title + " V0.1");
+set_ansi_title("radio68");
+
+# Parse command line arguments. These MUST appear after --. #
+REF ARG_PARSE arg_parser := make_arg_parser(title);
+arg_set_description(arg_parser,
+"This program allows a .m3u file to be chosen in a directory, then\n\
+it allows a stream URL to be selected from that file. The stream\n\
+is played by mpv.\n\
+For this program to work correctly (or at all), the script mpv-run.sh\n\
+must be copied to somewhere on your PATH (e.g. /usr/local/bin) and\n\
+input.conf must be copied to ~/.config/mpv/input.conf. This is needed\n\
+to distinguish between mpv exiting because the user asked it to with q\n\
+and it exiting for other reasons.");
+
+REF STRING root_dir := arg_add_string_option(arg_parser, "-r", "--root", "Starting directory", get_home_dir+"BBC");
+REF STRING do_what := arg_add_string_option(arg_parser, "-p", "--pgm", "Program to run on each selected file", "mpv-run.sh");
+REF STRING abort_flag_file := arg_add_string_option(arg_parser, "-a", "--abortfile", "Program aborted flag file name", 
+                                                    "/tmp/mpv-abort-flag");
+( NOT parse_args(arg_parser) | put(stand error, ("Unknown or malformed command line arguments.", newline)); stop );
+
+STRING clean_root_dir := cleanpath(root_dir);
+STRINGPAIR name_ext := splitext(root_dir);
+
+WHILE TRUE
+DO
+   FLEX [1:0]STRING names := all_files_array(clean_root_dir, ".m3u", TRUE, TRUE);
+   INT file_index := select_from_indexed_list("Available m3u files", names);
+   (file_index > 0 |
+         select_from_m3u_file(clean_root_dir+"/"+names[file_index]) |
+            done
+   )
+OD;
+
+# All done if we come here. #
+done:
+print(("Done.", new line))

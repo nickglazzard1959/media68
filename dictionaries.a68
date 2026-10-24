@@ -1,0 +1,1165 @@
+COMMENT
+Dictionaries (a.k.a maps, a.k.a associative arrays)
+===================================================
+
+Because Algol 68 is strongly typed and doesn't have any meta-programming
+features, it's hard to see how to avoid having specific code for each value
+type. You could easily make a single dictionary type configurable by
+setting a few modes and values, but you can only have one dictionary type
+in a single program if you do that, AFAICS. You could try using UNIONs,
+but I'm not sure that doesn't lead to painful complications.
+
+Actually, a very simple macro processor could solve this problem ... 
+
+At present, here are STRING keys with STRING and INT values. It would be
+easy (but repetitive) to add any other value types.
+
+We can use a single access operator (//) and test for a "key existing" operator
+(HASKEY) for *all* the dictionary "types", though, because we do have operator
+overloading.
+
+NOTE: The dictionary code began with the associative array example for Algol 68 at
+Rosetta Code, which can be found here: 
+https://rosettacode.org/wiki/Associative_array/Iteration#ALGOL_68
+
+This file also contains implementations of some other basic data structures and
+algorithms. Currently lists of strings and some additional sorting algorithms.
+
+Author: Nick Glazzard 2026
+--------------------------
+COMMENT
+
+PR read "utility.a68" PR
+
+# --------------------------------------- #
+# Simplest single linked list of strings. #
+# --------------------------------------- #
+
+MODE STRING_LIST_ELEMENT = STRUCT(STRING value, REF STRING_LIST_ELEMENT next);
+MODE STRING_LIST = STRUCT(REF STRING_LIST_ELEMENT head,
+                          REF STRING_LIST_ELEMENT tail,
+                          INT n_elems, 
+                          REF STRING_LIST_ELEMENT current_position);
+REF STRING_LIST_ELEMENT nil_sle = NIL; # You cannot use an untyped NIL! #
+
+# Initialise string list. #
+OP STRING_LIST_INIT = (REF STRING_LIST list) REF STRING_LIST:
+(
+   head OF list := tail OF list := nil_sle;
+   current_position OF list := nil_sle;
+   n_elems OF list := 0;
+   list
+);
+
+# Append a string to a list. Overload PLUSAB. Cheap. O(1). #
+OP +:= = (REF STRING_LIST list, STRING elem) REF STRING_LIST:
+(
+   REF STRING_LIST_ELEMENT new_elem = HEAP STRING_LIST_ELEMENT;
+   value OF new_elem := elem;
+   next OF new_elem := nil_sle;
+   (head OF list IS nil_sle | head OF list := new_elem | next OF tail OF list := new_elem);
+   tail OF list := new_elem;
+   n_elems OF list +:= 1; 
+   list
+);
+
+# Append a row of strings to a list. Another PLUSAB overload. #
+OP +:= = (REF STRING_LIST list, []STRING rowofstrings) REF STRING_LIST:
+(
+   FOR i TO ELEMS rowofstrings
+   DO
+      list +:= rowofstrings[i]
+   OD;
+   list
+);
+
+# Test if list contains a given string. Expensive. O(n) #
+PRIO HASELEM = 1;
+OP HASELEM = (REF STRING_LIST list, STRING elem) BOOL:
+(
+   BOOL retval := FALSE;
+   REF STRING_LIST_ELEMENT current := head OF list;
+   WHILE current ISNT nil_sle
+   DO
+      ((value OF current) = elem | retval := TRUE; done_search | current := next OF current)
+   OD;
+   done_search:
+   retval
+);
+
+# Return length of list. Overload ELEMS. #
+OP ELEMS = (REF STRING_LIST list) INT:
+(
+   n_elems OF list
+);
+
+# Get list value by "index". Expensive. Very expensive if used to get the whole list!  #
+PRIO GET = 1;
+OP GET = (REF STRING_LIST list, INT i) STRING:
+(
+   STRING retval := "";
+   IF (i >= 1) AND (i <= (n_elems OF list))
+   THEN
+      REF STRING_LIST_ELEMENT current := head OF list;
+      FOR j TO (n_elems OF list)
+      DO
+         (j = i | retval := value OF current; done_search | current := next OF current)
+      OD
+   FI;
+   done_search:
+   retval
+);
+
+# Get a reference to a string list element value. This can be used to get and set that value. #
+OP GET = (REF STRING_LIST_ELEMENT sle) REF STRING:
+(
+   value OF sle
+);
+
+# Return the contents of the list as an array of strings. #
+PROC string_list_as_array = (REF STRING_LIST list) []STRING:
+(
+   INT n := n_elems OF list;
+   [n]STRING retval;
+   REF STRING_LIST_ELEMENT current := head OF list;
+   FOR i TO n
+   DO
+      retval[i] := value OF current;
+      current := next OF current
+   OD;
+   retval
+);
+
+# Convert a string array to a string list. #
+PROC string_array_as_list = (REF []STRING array) REF STRING_LIST:
+(
+   REF STRING_LIST retval := STRING_LIST_INIT HEAP STRING_LIST;
+   FOR i TO ELEMS array DO retval +:= array[i] OD;
+   retval
+);
+
+# Print the contents of a string list. #
+PROC string_list_print = (REF STRING_LIST list) VOID:
+(
+   INT line_length := 0;
+   REF STRING_LIST_ELEMENT cur := head OF list;
+   WHILE cur ISNT nil_sle
+   DO
+      print((value OF cur,", "));
+      line_length +:= (ELEMS (value OF cur) + 2);
+      (line_length > 75 | print((newline)); line_length := 0);
+      cur := next OF cur
+   OD;
+   (line_length > 0 | print((newline)))
+);
+
+# Print each element of a string list. #
+PROC string_list_print_elements = (REF STRING_LIST list) VOID:
+(
+   INT line_length := 0;
+   REF STRING_LIST_ELEMENT cur := head OF list;
+   WHILE cur ISNT nil_sle
+   DO
+      print((value OF cur, new line));
+      cur := next OF cur
+   OD
+);
+
+# Return a reference to the first element of a list. Return nil_sle if empty. #
+OP FIRST = (REF STRING_LIST list) REF STRING_LIST_ELEMENT:
+(
+   current_position OF list := head OF list;
+   current_position OF list
+);
+
+# Move to the next element of a list and return a reference to it, or nil_sle at the end. #
+OP NEXT = (REF STRING_LIST list) REF STRING_LIST_ELEMENT:
+(
+   (current_position OF list ISNT nil_sle |
+         current_position OF list := next OF current_position OF list);
+   current_position OF list
+);
+
+# Pop the tail element off the list. O(n). #
+OP POP = (REF STRING_LIST list) STRING:
+(
+   STRING retval := "";
+   IF n_elems OF list > 0
+   THEN
+      IF n_elems OF list = 1
+      THEN
+         retval := value OF head OF list;
+         head OF list := tail OF list := nil_sle
+      ELSE
+         REF STRING_LIST_ELEMENT prev := nil_sle;
+         REF STRING_LIST_ELEMENT cur := head OF list;
+         WHILE (next OF cur) ISNT nil_sle
+         DO
+            prev := cur;
+            cur := next OF cur
+         OD;
+         retval := value OF tail OF list;
+         next OF prev := nil_sle;
+         tail OF list := prev
+      FI;
+      n_elems OF list -:= 1
+   FI;
+   retval
+);
+
+# Empty a list. Return the number of elements that were in it before. #
+OP CLEAR = (REF STRING_LIST list) INT:
+(
+   INT retval := n_elems OF list;
+   head OF list := tail OF list := nil_sle;
+   n_elems OF list := 0;
+   retval
+);
+
+# Count how many times a value occurs in a string list. #
+PRIO COUNT = 1;
+OP COUNT = (REF STRING_LIST list, STRING value) INT:
+(
+   INT retval := 0;
+   REF STRING_LIST_ELEMENT cur := head OF list;
+   WHILE cur ISNT nil_sle
+   DO
+      (value OF cur = value | retval +:= 1);
+      cur := next OF cur
+   OD;
+   retval
+);
+
+# Find the index of the first occurrence of value in a string list. 0 if not there. #
+PRIO INDEX = 1;
+OP INDEX = (REF STRING_LIST list, STRING value) INT:
+(
+   INT retval := 0;
+   INT cur_index := 0;
+   REF STRING_LIST_ELEMENT cur := head OF list;
+   WHILE cur ISNT nil_sle
+   DO
+      cur_index +:= 1;
+      (value OF cur = value | retval := cur_index; done_search);
+      cur := next OF cur
+   OD;
+   done_search:
+   retval
+);
+
+# Delete a list item, given the index of the item. Return value of list item. #
+PRIO DEL = 1;
+OP DEL = (REF STRING_LIST list, INT index) STRING:
+(
+   STRING retval := "";
+   IF n_elems OF list > 0 # If there are no elements at all, return "" immediately. #
+   THEN
+
+      # Check index is in range. #
+      IF (index > 0) AND (index <= n_elems OF list)
+      THEN
+         
+         # Traverse the list. Keep track of current index.  #
+         INT cur_index := 0;
+         REF STRING_LIST_ELEMENT prev := nil_sle;
+         REF STRING_LIST_ELEMENT cur := head OF list;
+         WHILE cur ISNT nil_sle
+         DO
+            cur_index +:= 1;
+
+            # Is this the index we want to delete? #
+            IF cur_index = index
+            THEN
+               # Yes. Delete this index. If prev is NIL, this is the first item. #
+               # If next OF cur is NIL, this is the last item. It may be both. #
+               retval := value OF cur;
+               n_elems OF list -:= 1;
+
+               IF (prev IS nil_sle) AND (next OF cur IS nil_sle)
+               THEN
+                  # One and only item is to be deleted. List becomes empty. #
+                  head OF list := tail OF list := nil_sle
+
+               ELIF prev IS nil_sle
+               THEN
+                  #  First item is to be deleted. #
+                  head OF list := next OF cur
+
+               ELIF next OF cur IS nil_sle
+               THEN
+                  # Last item is to be deleted. #
+                  tail OF list := prev;
+                  next OF tail OF list := nil_sle
+
+               ELSE
+                 # An item in the middle to is be deleted. #
+                 next OF prev := next OF cur
+               FI;
+
+               # End list traversal. #
+               done_search
+
+            # Not the desired index. Move to next item in the list. #
+            ELSE
+               prev := cur;
+               cur := next OF cur
+            FI
+         OD;
+         done_search:
+         SKIP
+      FI # Index is in valid range.  #
+   FI; # There is at least one list element.  #
+
+   retval
+);
+
+# For a string list of lines, split each line to a set of words (separated by spaces). #
+# This preserves blank lines by marking them with a specific 'marker word': <EMPTY>. #
+PROC string_list_split_to_words = (REF STRING_LIST lines, REF STRING_LIST words) VOID:
+(
+   # Iterate over lines. #
+   REF STRING_LIST_ELEMENT line := FIRST lines;
+   WHILE line ISNT nil_sle
+   DO
+      STRING cur_line := trim(value OF line);
+      IF ELEMS cur_line = 0
+      THEN
+         words +:= "<EMPTY>"
+
+      # Line not all blank. Extract words. #
+      ELSE
+         INT n_chars := ELEMS cur_line;
+
+         # Step over the characters of a line. Because we have trimmed white space from #
+         # both ends of the line, we must begin and end in a word. #
+         BOOL in_word := TRUE;
+         STRING cur_word := "";
+         FOR i TO n_chars
+         DO
+            # Finding a space terminates the current word, if we are in one. #
+            IF is space(cur_line[i])
+            THEN
+               IF in_word
+               THEN
+                  words +:= cur_word;
+                  cur_word := "";
+                  in_word := FALSE
+               FI
+
+            # Not a space, so we are in a word. #
+            ELSE
+               in_word := TRUE
+            FI;
+
+            # If we are in a word, add the current character to the word. #
+            (in_word | cur_word +:= cur_line[i]);
+
+            # If this is the last character of the line, add the current word. #
+            (i = n_chars | words +:= cur_word )
+         OD
+      FI;
+      line := NEXT lines
+   OD
+);
+
+# For a string list of words, join a set of words to a set of lines, breaking at line_length chars. #
+# This preserves the original blank lines.  #
+PROC string_list_join_to_lines = (REF STRING_LIST words, REF STRING_LIST lines, INT line_length) VOID:
+(
+   # Start with an empty line. #
+   STRING output := "";
+   INT n_output := 0;
+
+   # Iterate over words. #
+   REF STRING_LIST_ELEMENT word := FIRST words;
+   WHILE word ISNT nil_sle
+   DO
+      # If word is <EMPTY> flush and add a blank line. #
+      IF (value OF word) = "<EMPTY>"
+      THEN
+         (n_output > 0 | 
+               lines +:= trim(output);
+               output := "";
+               n_output := 0
+         );
+         lines +:= ""
+
+      ELSE
+         # Append word with space at the end. #
+         output +:= (value OF word + " ");
+         n_output +:= (ELEMS (value OF word) + 1);
+
+         # Line length reached? If so, insert into output line list. #
+         (n_output >= line_length |
+               lines +:= trim(output);
+               output := "";
+               n_output := 0
+         )
+      FI;
+
+      word := NEXT words
+   OD;
+
+   # Add any partial line. #
+   (n_output > 0 | lines +:= trim(output))
+);
+
+# Split a string on newline characters into a string list. #
+PROC string_lines_to_string_list = (STRING lines, REF STRING_LIST list) VOID:
+(
+   INT start_pos := 1;
+   INT end_pos;
+   CHAR nl = REPR 10;
+   
+   STRING curstr := lines;
+   WHILE char in string(nl, end_pos, curstr)
+   DO
+      list +:= curstr[start_pos:end_pos-1];
+      curstr := curstr[end_pos+1:]
+   OD;
+
+   (curstr /= "" | list +:= curstr)
+);
+
+
+# -------------------------- #
+# Dictionary hash functions. #
+# -------------------------- #
+
+INT hash modulus = 256;
+
+# Hash function for strings. Used to hash keys. #
+OP DICT_HASH = (STRING key) INT:
+(
+   INT result := ABS ( UPB key - LWB key ) MOD hash modulus;
+   FOR char pos FROM LWB key TO UPB key
+   DO
+      result PLUSAB ( ABS key[ char pos ] - ABS " " );
+      result MODAB  hash modulus
+   OD;
+   result
+);
+
+# -------------------------- #
+# STRING value dictionaries. #
+# -------------------------- #
+
+# MODE declarations for STRING value dictionaries. #
+MODE STRING_DICT_VALUE = STRING;  # Values stored in the dictionary. #
+MODE STRING_DICT_KEYVAL = STRUCT(STRING key, REF STRING_DICT_VALUE value); # Dictionary element. #
+ # Collision list entry. #
+MODE STRING_DICT_LIST_NODE = STRUCT(STRING_DICT_KEYVAL keyval, REF STRING_DICT_LIST_NODE next);
+REF STRING_DICT_LIST_NODE nil element list = NIL; # NIL collision list entry reference. #
+REF STRING_DICT_KEYVAL nil keyval = NIL; # NIL dictionary element reference. #
+STRING_DICT_VALUE init element value = ""; 
+
+# Dictionary: hash table collision lists. #
+MODE STRING_DICT = STRUCT([0:hash modulus-1]REF STRING_DICT_LIST_NODE heads, # Hash table (list heads). #
+                          REF STRING_LIST keys_list,                         # In-order list of keys. #
+                          INT current_hash,                                  # Used for FIRST/NEXT. #
+                          REF STRING_DICT_LIST_NODE current_position         # Used for FIRST/NEXT. #
+                         ); 
+
+# Initialise a dictionary by setting all its collision lists to NIL. #
+OP STRING_DICT_INIT = (REF STRING_DICT dict) REF STRING_DICT:
+(
+   FOR hash value FROM 0 TO hash modulus - 1
+   DO
+      (heads OF dict)[hash value] := nil element list
+   OD;
+   keys_list OF dict := STRING_LIST_INIT HEAP STRING_LIST;
+   dict
+);
+
+# Return a reference to the value for key. This can be used to retrieve an existing key-value AND #
+# to create a NEW key-value, the value then being set by ASSIGNING to the returned reference. #
+# Note that this ALWAYS adds a new key if it isn't already defined. #
+PRIO // = 1;
+OP // = (REF STRING_DICT dict, STRING key) REF STRING_DICT_VALUE:
+(
+   REF STRING_DICT_VALUE result;
+
+   # Hash the key. Find the appropriate list head. #
+   INT hash value = DICT_HASH key;
+   REF STRING_DICT_LIST_NODE element := (heads OF dict)[hash value];
+
+   # See if key already exists. #
+   BOOL found element := FALSE;
+   WHILE (element ISNT nil element list) AND NOT found element
+   DO
+      found element := (key OF keyval OF element = key);
+      (found element | result := value OF keyval OF element | element := next OF element)
+   OD;
+
+   # No. Add a new list element at the head of the relevant hash collision list. #
+   # Note how this can be done with a single multiple assignment statement, including heap allocations. #
+   IF NOT found element
+   THEN
+      (heads OF dict)[hash value] := HEAP STRING_DICT_LIST_NODE 
+                                  := (HEAP STRING_DICT_KEYVAL := (key, HEAP STRING_DICT_VALUE := init element value),
+                                                                     (heads OF dict)[hash value]);
+      result := value OF keyval OF (heads OF dict)[hash value];
+      (keys_list OF dict) +:= key
+   FI;
+   result
+);
+
+# If a single character key is provided, it must be cast to a STRING. #
+OP // = (REF STRING_DICT dict, CHAR key) REF STRING_DICT_VALUE:
+(
+   dict // STRING(key)
+);
+
+# Check if a key exists in a dictionary. #
+PRIO HASKEY = 1;
+OP HASKEY = (REF STRING_DICT dict, STRING key) BOOL:
+(
+   REF STRING_DICT_LIST_NODE element := (heads OF dict)[DICT_HASH key];
+
+   BOOL found element := FALSE;
+   WHILE (element ISNT nil element list) AND NOT found element
+   DO
+      found element := (key OF keyval OF element = key);
+      (NOT found element | element := next OF element)
+   OD;
+   found element
+);
+
+# Again, if a single character key is provided, it must be cast to a STRING. #
+OP HASKEY = (REF STRING_DICT dict, CHAR key) BOOL:
+(
+   dict HASKEY STRING(key)
+);
+
+# Get keys as a row of STRINGs. #
+PROC get_string_dict_keys_array = (REF STRING_DICT dict) []STRING:
+(
+   string_list_as_array(keys_list OF dict)
+);
+
+# Print a list of keys readably. #
+PROC print_string_dict_keys = (REF STRING_DICT dict) VOID:
+(
+   (ELEMS (keys_list OF dict) = 0 | print((new line)) | string_list_print(keys_list OF dict))
+);
+
+# Return number of keys in dictionary. Overload ELEMS. #
+OP ELEMS = (REF STRING_DICT dict) INT:
+(
+   ELEMS (keys_list OF dict)
+);
+
+# Start traversal of dictionary contents. Returns "first" element. Can be NIL (nil element list).#
+OP FIRST = (REF STRING_DICT dict) REF STRING_DICT_KEYVAL:
+(
+   current_hash OF dict := LWB (heads OF dict) - 1;  # Start with first hash list entry. #
+   current_position OF dict := nil element list;        # Which may be empty. #
+   NEXT dict                                            # Find the first non-empty list element. #
+);
+
+# Find the "next" element of the dictionary, if any.  Return nil element list if no more. #
+OP NEXT = (REF STRING_DICT dict) REF STRING_DICT_KEYVAL:
+(
+   # Find a list head with a collision list. #
+   WHILE (current_position OF dict IS nil element list) AND (current_hash OF dict < UPB (heads OF dict))
+   DO
+      current_hash OF dict +:= 1;
+      current_position OF dict := (heads OF dict)[current_hash OF dict]
+   OD;
+
+   # Reached the end of the list head array? #
+   IF current_hash OF dict > UPB (heads OF dict)
+   THEN
+      nil keyval
+
+   # Reached the end of the list?  #
+   ELIF (current_position OF dict) IS nil element list
+   THEN
+      nil keyval
+
+   # There is another element, return a reference to it. #
+   ELSE
+      REF STRING_DICT_LIST_NODE found_element = current_position OF dict;
+      current_position OF dict := next OF current_position OF dict;
+      keyval OF found_element
+   FI
+);
+
+# Delete the keyval with a given key from a string dictionary. Return TRUE if key found and deleted, else FALSE. #
+OP DEL = (REF STRING_DICT dict, STRING key) BOOL:
+(
+   BOOL retval := FALSE;
+
+   # Hash the key. Find the appropriate list head. #
+   INT hash value = DICT_HASH key;
+   REF STRING_DICT_LIST_NODE element := (heads OF dict)[hash value];
+   REF STRING_DICT_LIST_NODE previous_element := nil element list;
+    
+   # See if key already exists. It must if we are to delete it. #
+   BOOL found element := FALSE;
+   WHILE (element ISNT nil element list) AND NOT found element
+   DO
+      found element := (key OF keyval OF element = key);
+      IF found element
+      THEN
+         # Found it, so delete it. #
+         IF previous_element IS nil element list
+         THEN
+            # Delete head element. #
+            (heads OF dict)[hash value] := next OF element
+         ELSE
+            # Delete element elsewhere in the list. #
+            next OF previous_element := next OF element
+         FI;
+         # Delete the key in the separately maintained key list. #
+         VOID((keys_list OF dict) DEL ((keys_list OF dict) INDEX key));
+         retval := TRUE;
+         done
+      ELSE
+         previous_element := element;
+         element := next OF element
+      FI
+   OD;
+
+   done:
+   retval
+);
+
+# DEL when key is a single character. #
+OP DEL = (REF STRING_DICT dict, CHAR key) BOOL:
+(
+   dict DEL STRING(key)
+);
+
+# ----------------------- #
+# INT value dictionaries. #
+# ----------------------- #
+
+# MODE declarations for INT value dictionaries. #
+MODE INT_DICT_VALUE = INT;  # Values stored in the dictionary. #
+MODE INT_DICT_KEYVAL = STRUCT(STRING key, REF INT_DICT_VALUE value); # Dictionary element. #
+ # Collision list entry. #
+MODE INT_DICT_LIST_NODE = STRUCT(INT_DICT_KEYVAL keyval, REF INT_DICT_LIST_NODE next);
+REF INT_DICT_LIST_NODE nil int element list = NIL; # NIL collision list entry reference. #
+REF INT_DICT_KEYVAL nil int element = NIL; # NIL dictionary element reference. #
+INT_DICT_VALUE init int element value = -1; 
+
+# Dictionary: hash table collision lists. #
+MODE INT_DICT = STRUCT([0:hash modulus-1]REF INT_DICT_LIST_NODE heads,  # Hash table (list heads). #
+                       REF STRING_LIST keys_list,                       # In-order list of keys. #
+                       INT current_hash,                                # Used for FIRST/NEXT. #
+                       REF INT_DICT_LIST_NODE current_position          # Used for FIRST/NEXT. #
+                      ); 
+
+# Initialise a dictionary by setting all its collision lists to NIL. #
+OP INT_DICT_INIT = (REF INT_DICT dict) REF INT_DICT:
+(
+   FOR hash value FROM 0 TO hash modulus - 1
+   DO
+      (heads OF dict)[hash value] := nil int element list
+   OD;
+   keys_list OF dict := STRING_LIST_INIT HEAP STRING_LIST;
+   dict
+);
+
+# Return a reference to the value for key. This can be used to retrieve an existing key-value AND #
+# to create a NEW key-value, the value then being set by ASSIGNING to the returned reference. #
+# Note that this ALWAYS adds a new key if it isn't already defined. #
+OP // = (REF INT_DICT dict, STRING key) REF INT_DICT_VALUE:
+(
+   REF INT_DICT_VALUE result;
+   INT hash value = DICT_HASH key;
+   
+   REF INT_DICT_LIST_NODE element := (heads OF dict)[hash value];
+
+   BOOL found element := FALSE;
+   WHILE (element ISNT nil int element list) AND NOT found element
+   DO
+      found element := ((key OF keyval OF element) = key);
+      (found element | result := value OF keyval OF element | element := next OF element)
+   OD;
+
+   IF NOT found element
+   THEN
+      (heads OF dict)[hash value] := HEAP INT_DICT_LIST_NODE 
+                                      := (HEAP INT_DICT_KEYVAL := (key, HEAP INT_DICT_VALUE := init int element value),
+                                                                  (heads OF dict)[hash value]);
+      result := value OF keyval OF (heads OF dict)[hash value];
+      (keys_list OF dict) +:= key
+   FI;
+   result
+);
+
+# If a single character key is provided, it must be cast to a STRING. #
+OP // = (REF INT_DICT dict, CHAR key) REF INT_DICT_VALUE:
+(
+   dict // STRING(key)
+);
+
+# Check if a key exists in a dictionary. #
+OP HASKEY = (REF INT_DICT dict, STRING key) BOOL:
+(
+   REF INT_DICT_LIST_NODE element := (heads OF dict)[DICT_HASH key];
+
+   BOOL found element := FALSE;
+   WHILE (element ISNT nil int element list) AND NOT found element
+   DO
+      found element := (key OF keyval OF element = key);
+      (NOT found element | element := next OF element)
+   OD;
+   found element
+);
+
+# Again, if a single character key is provided, it must be cast to a STRING. #
+OP HASKEY = (REF INT_DICT dict, CHAR key) BOOL:
+(
+   dict HASKEY STRING(key)
+);
+
+# Get the keys of dictionaaary of integers. #
+PROC get_int_dict_keys_array = (REF INT_DICT dict) []STRING:
+(
+   string_list_as_array(keys_list OF dict)
+);
+
+# Print a list of keys readably. #
+PROC print_int_dict_keys = (REF INT_DICT dict) VOID:
+(
+   (ELEMS (keys_list OF dict) = 0 | print((new line)) | string_list_print(keys_list OF dict))
+);
+
+# Return number of keys in dictionary. Overload ELEMS. #
+OP ELEMS = (REF INT_DICT dict) INT:
+(
+   ELEMS (keys_list OF dict)
+);
+
+# Start traversal of dictionary contents. Returns "first" element. Can be NIL (nil element list).#
+OP FIRST = (REF INT_DICT dict) REF INT_DICT_KEYVAL:
+(
+   current_hash OF dict := LWB (heads OF dict) - 1;  # Start with first hash list entry. #
+   current_position OF dict := nil int element list;    # Which may be empty. #
+   NEXT dict                                            # Find the first non-empty list element. #
+);
+
+# Find the "next" element of the dictionary, if any.  Return nil element list if no more. #
+OP NEXT = (REF INT_DICT dict) REF INT_DICT_KEYVAL:
+(
+   # Find a list head with a collision list. #
+   WHILE (current_position OF dict IS nil int element list) AND (current_hash OF dict < UPB (heads OF dict))
+   DO
+      current_hash OF dict +:= 1;
+      current_position OF dict := (heads OF dict)[current_hash OF dict]
+   OD;
+
+   # Reached the end of the list head array? #
+   IF current_hash OF dict > UPB (heads OF dict)
+   THEN
+      nil int element
+
+   # Reached the end of the list?  #
+   ELIF (current_position OF dict) IS nil int element list
+   THEN
+      nil int element
+
+   # There is another element, return a reference to it. #
+   ELSE
+      REF INT_DICT_LIST_NODE found_element = current_position OF dict;
+      current_position OF dict := next OF current_position OF dict;
+      keyval OF found_element
+   FI
+);
+
+# Delete the keyval with a given key from an INT dictionary. Return TRUE if key found and deleted, else FALSE. #
+OP DEL = (REF INT_DICT dict, STRING key) BOOL:
+(
+   BOOL retval := FALSE;
+
+   # Hash the key. Find the appropriate list head. #
+   INT hash value = DICT_HASH key;
+   REF INT_DICT_LIST_NODE element := (heads OF dict)[hash value];
+   REF INT_DICT_LIST_NODE previous_element := nil int element list;
+
+   # See if key already exists. It must if we are to delete it. #
+   BOOL found element := FALSE;
+   WHILE (element ISNT nil int element list) AND NOT found element
+   DO
+      found element := (key OF keyval OF element = key);
+      IF found element
+      THEN
+         # Found it, so delete it. #
+         IF previous_element IS nil int element list
+         THEN
+            # Delete head element. #
+            (heads OF dict)[hash value] := next OF element
+         ELSE
+            # Delete element elsewhere in the list. #
+            next OF previous_element := next OF element
+         FI;
+         # Delete the key in the separately maintained key list. #
+         VOID((keys_list OF dict) DEL ((keys_list OF dict) INDEX key));
+         retval := TRUE;
+         done
+      ELSE
+         previous_element := element;
+         element := next OF element
+      FI
+   OD;
+
+   done:
+   retval
+);
+
+# DEL when key is a single character. #
+OP DEL = (REF INT_DICT dict, CHAR key) BOOL:
+(
+   dict DEL STRING(key)
+);
+
+
+# -------------------------- #
+# Sundry related algorithms. #
+# -------------------------- #
+
+# Find an array of integers [1:n] randomly permuted. Fisher-Yates algorithm. #
+PROC permuted_integers = (INT n, INT seed) []INT:
+(
+   [n]INT array_of_n;
+   first random(seed);
+   FOR i TO n DO array_of_n[i] := i OD;
+   FOR i FROM n DOWNTO 1
+   DO
+      INT j := ROUND (n * next random);
+      INT temp := array_of_n[i]; array_of_n[i] := array_of_n[j]; array_of_n[j] := temp
+   OD;
+   array_of_n
+);
+
+
+# ------------------- #
+# Sorting algorithms. #
+# ------------------- #
+
+# Index sort strings using insertion sort. Return a row of sorted indices. #
+# Insertion sort is fine for smallish arrays (100s of elements). #
+# Note that this uses the Algol 68 Genie extension ANDF to prevent the elaboration #
+# of the second term of an AND if the first term yields FALSE. With AND, both terms #
+# are evaluated collaterally, resulting in an index out of bounds. #
+PROC isort_strings = ([]STRING strings) []INT:
+(
+   INT n := ELEMS strings;
+   [n]INT indices;
+
+   FOR i TO n DO indices[i] := i OD;
+
+   FOR i FROM 2 TO n
+   DO
+      INT index := indices[i];
+      INT j := i - 1;
+      WHILE j >= 1 ANDF strings[indices[j]] > strings[index]
+      DO
+         indices[j+1] := indices[j];
+         j -:= 1
+      OD;
+      indices[j+1] := index
+   OD;
+
+   indices
+);
+
+# Index sort reals using insertion sort. Return a row of sorted indices. #
+PROC isort_reals = ([]STRING reals) []INT:
+(
+   INT n := ELEMS reals;
+   [n]INT indices;
+
+   FOR i TO n DO indices[i] := i OD;
+
+   FOR i FROM 2 TO n
+   DO
+      INT index := indices[i];
+      INT j := i - 1;
+      WHILE j >= 1 ANDF reals[indices[j]] > reals[index]
+      DO
+         indices[j+1] := indices[j];
+         j -:= 1
+      OD;
+      indices[j+1] := index
+   OD;
+
+   indices
+);
+
+# Index sort ints using insertion sort. Return a row of sorted indices. #
+PROC isort_ints = ([]STRING ints) []INT:
+(
+   INT n := ELEMS ints;
+   [n]INT indices;
+
+   FOR i TO n DO indices[i] := i OD;
+
+   FOR i FROM 2 TO n
+   DO
+      INT index := indices[i];
+      INT j := i - 1;
+      WHILE j >= 1 ANDF ints[indices[j]] > ints[index]
+      DO
+         indices[j+1] := indices[j];
+         j -:= 1
+      OD;
+      indices[j+1] := index
+   OD;
+
+   indices
+);
+
+
+# ------ #
+# TESTS. #
+# ------ #
+
+IF FALSE
+THEN
+
+# Test string dicts. #
+REF STRING_DICT map := STRING_DICT_INIT LOC STRING_DICT;
+map // "One" := "First element";
+map // "Two" := "Second";
+map // "Three" := "Third";
+map // "a" := "Fourth";
+map // "Five" := "Fifth";
+
+print(("map[a] = ", map // "a", new line));
+
+print(("a in map? ", map HASKEY "a", new line));
+print(("Nuts in map? ", map HASKEY "Nuts", new line));
+
+print(("Accessing non-existent key: ", map // "Nope", new line)); # Creates key Nope! #
+
+print(("number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+
+REF STRING_DICT_KEYVAL strelem := FIRST map;
+WHILE strelem ISNT nil keyval
+DO
+   print(("Key ", key OF strelem, " --> ", value OF strelem, newline));
+   strelem := NEXT map
+OD;
+
+print(("Delete Three: ", map DEL "Three", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete Three AGAIN: ", map DEL "Three", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete a: ", map DEL "a", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete Five: ", map DEL "Five", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete One: ", map DEL "One", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete Two: ", map DEL "Two", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete Nope: ", map DEL "Nope", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+print(("Delete Nope AGAIN: ", map DEL "Nope", new line));
+print(("... number of keys = ", ELEMS map, new line));
+print(("... ")); print_string_dict_keys(map);
+
+print((newline));
+
+# Test int dicts. #
+REF INT_DICT imap := INT_DICT_INIT LOC INT_DICT;
+imap // "One" := 1;
+imap // "Two" := 2;
+imap // "Three" := 3;
+imap // "Four" := 4;
+imap // "Five" := 5;
+
+print(("imap[four] = ", imap // "Four", new line));
+
+print(("Two in imap? ", imap HASKEY "Two", new line));
+print(("Nuts in imap? ", imap HASKEY "Nuts", new line));
+
+
+print(("number of keys = ", ELEMS imap, new line));
+print((get_int_dict_keys_array(imap), new line));
+
+REF INT_DICT_KEYVAL intelem := FIRST imap;
+WHILE intelem ISNT nil int element
+DO
+   print(("Key ", key OF intelem, " --> ", value OF intelem, newline));
+   intelem := NEXT imap
+OD;
+
+print(("Delete a: ", imap DEL "a", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+print(("Delete Three: ", imap DEL "Three", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+print(("Delete Three AGAIN: ", imap DEL "Three", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+print(("Delete Five: ", imap DEL "Five", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+print(("Delete Two: ", imap DEL "Two", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+print(("Delete One: ", imap DEL "One", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+print(("Delete Four: ", imap DEL "Four", new line));
+print(("... number of keys = ", ELEMS imap, new line));
+print(("... ")); print_int_dict_keys(imap);
+
+print((newline));
+
+# Test string lists. #
+REF STRING_LIST sl := STRING_LIST_INIT LOC STRING_LIST;
+sl +:= "Hello";
+sl +:= "there";
+sl +:= "you";
+sl +:= "there";
+sl +:= "girls!";
+
+REF STRING_LIST_ELEMENT sle := FIRST sl;
+WHILE sle ISNT nil_sle
+DO
+   print(("List element value = ", value OF sle, new line));
+   sle := NEXT sl
+OD;
+
+print(("How many there-s in the list = ", sl COUNT "there", newline));
+
+print(("Index of there = ", sl INDEX "there", newline));
+print(("Index of not-there = ", sl INDEX "not-there", newline));
+
+WHILE ELEMS sl > 0
+DO
+   print(("sl Pop! ", POP sl, newline))
+OD;
+
+REF STRING_LIST sl2 := STRING_LIST_INIT LOC STRING_LIST;
+sl2 +:= "Hello ";
+sl2 +:= "there ";
+
+WHILE ELEMS sl2 > 0
+DO
+   print(("sl2 Pop! ", POP sl2, newline))
+OD;
+
+
+REF STRING_LIST sl1 := STRING_LIST_INIT LOC STRING_LIST;
+sl1 +:= "Hello ";
+
+WHILE ELEMS sl1 > 0
+DO
+   print(("sl1 Pop! ", POP sl1, newline))
+OD;
+
+print(("sl1 Extra Pop! ", POP sl1, newline));
+
+sl +:= "sl again 1";
+sl +:= "sl again 2";
+
+print(("Cleared items in sl = ",CLEAR sl,newline));
+sl +:= "another entry";
+
+ sle := FIRST sl;
+WHILE sle ISNT nil_sle
+DO
+   print(("List element value = ", value OF sle, new line));
+   sle := NEXT sl
+OD;
+
+STRING_LIST new_list := string_array_as_list( LOC [4]STRING := ("a","b","c","d") );
+string_list_print(new_list);
+new_list +:= "some longer";
+new_list +:= "stuff";
+new_list +:= "that I";
+new_list +:= "do not know";
+new_list +:= "what";
+new_list +:= "to";
+new_list +:= "do";
+new_list +:= "with";
+new_list +:= "but";
+new_list +:= "it";
+new_list +:= "still";
+new_list +:= "is not long enough";
+string_list_print(new_list);
+
+STRING deleted_item := new_list DEL 5;
+print(("Deleted string: ",deleted_item,newline));
+string_list_print(new_list);
+
+deleted_item := new_list DEL (new_list INDEX "what") ;
+print(("Deleted string: ",deleted_item,newline));
+string_list_print(new_list);
+
+deleted_item := new_list DEL (new_list INDEX "does not exist") ;
+print(("Deleted string: ",deleted_item,newline));
+string_list_print(new_list);
+
+FLEX [1:0] STRING all_items := string_list_as_array(new_list);
+FLEX [1:0] INT permuted := permuted_integers(ELEMS all_items, 12345);
+FOR i TO ELEMS all_items
+DO
+   INT j := permuted[i];
+   deleted_item := new_list DEL (new_list INDEX all_items[j]);
+   print(("... Deleted string: ",deleted_item,newline))
+OD;
+
+print(("Remaining items: ",ELEMS new_list,newline));
+
+# Test Fisher-Yates shuffle permutation. (Already used it, though!) #
+FLEX [1:0] INT rint := permuted_integers(6, 12345);
+print((rint,newline));
+
+# Test split line list to word list. #
+REF STRING_LIST line_list := STRING_LIST_INIT LOC STRING_LIST;
+line_list +:= "Because Algol 68 is strongly typed and doesn't have any meta-programming";
+line_list +:= "features, it's hard to see how to avoid having specific code for each value";
+line_list +:= "type. You could easily make a single dictionary type configurable by";
+line_list +:= "setting a few modes and values, but you can only have one dictionary type";
+line_list +:= "in a single program if you do that, AFAICS. You could try using UNIONs,";
+line_list +:= "but I'm not sure that doesn't lead to painful complications.";
+line_list +:= "";
+line_list +:= "Actually, a very simple macro processor could solve this problem ... ";
+line_list +:= "";
+line_list +:= "At present, here are STRING keys with STRING and INT values. It would be";
+line_list +:= "easy (but repetitive) to add any other value types.";
+
+REF STRING_LIST word_list := STRING_LIST_INIT LOC STRING_LIST;
+string_list_split_to_words(line_list, word_list);
+string_list_print_elements(word_list);
+
+REF STRING_LIST_ELEMENT word := FIRST word_list;
+WHILE word ISNT nil_sle
+DO
+   (all_upper(GET word) | GET word := "`" + GET word + "`");
+   word := NEXT word_list
+OD;
+
+REF STRING_LIST new_line_list := STRING_LIST_INIT LOC STRING_LIST;
+string_list_join_to_lines(word_list, new_line_list, 75);
+string_list_print_elements(new_line_list);
+
+REF STRING_LIST array_add_list := STRING_LIST_INIT LOC STRING_LIST;
+[]STRING s1 = ("dsurf");
+array_add_list +:= s1;
+array_add_list +:= "thing";
+STRING font_directory := "fd";
+STRING title := "a title";
+[]STRING s2 = ("--title", title,
+               "--fontdir", font_directory);
+array_add_list +:= s2;
+string_list_print_elements(array_add_list)
+
+FI;

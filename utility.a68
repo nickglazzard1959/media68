@@ -1,0 +1,2045 @@
+COMMENT
+Widely useful sundry routines, many to do with strings.
+=======================================================
+
+Includes:
+
+- Some time related routines, such as simple arithmetic in hours, minutes and seconds.
+- Routines for clamping numbers to ranges and min and max functions.
+- Many routines for trimming white space from strings, classifying strings and so on.
+- Many routines for converting strings to INTs and REALs and vice versa.
+- Functions for opening files and character devices in familiar ways.
+- Functions for splitting filenames and paths (getting extensions, base name, etc.)
+- Functions for reading and writing 1D and 2D arrays (row and row,row) of REALs to/from files.
+- Some other simple array functions.
+- Some aids to handling errors.
+
+Author: Nick Glazzard 2026
+--------------------------
+COMMENT
+
+# --------------------------- #
+# Sundry and OS related aids. #
+# --------------------------- #
+
+# Pause for test purposes. #
+PROC pause = (STRING s) VOID:
+(
+   put(stand error, ("Pause: ",s," > "));
+   get(stand in, (LOC STRING, new line))
+);
+
+# Sleep. The only approach seems to be to run sleep (1) command. t is in seconds. #
+# ACTUALLY: this seems to be in the standard prelude, but isn't documented. So use that.  #
+# But void the result.  #
+PROC sleep_void = (INT t) VOID:
+(
+   VOID(sleep(t))
+);
+
+# Get the user's HOME directory (from HOME environment variable). With a trailing /. #
+PROC get_home_dir = STRING:
+(
+   get env("HOME") + "/"
+);
+
+# Get environment variables that many programs seem to need to run happily. #
+# At least XDG_RUNTIME_DIR and DISPLAY are needed. That seems to be all. #
+# Well ... finding .config/* needs HOME (e.g. MPV) #
+PROC get_run_envars = []STRING:
+(
+   []STRING envar_names = ("XDG_RUNTIME_DIR",
+                           "XDG_SESSION_DESKTOP", 
+                           "XDG_SESSION_TYPE", 
+                           "XDG_CURRENT_DESKTOP",
+                           "USER",
+                           "HOME",
+                           "PATH",
+                           "DISPLAY");
+   []BOOL essential = (TRUE,
+                       FALSE,
+                       FALSE,
+                       FALSE,
+                       FALSE,
+                       TRUE,
+                       TRUE,
+                       TRUE);
+   [ELEMS envar_names]STRING envars;
+   FOR i TO ELEMS envars
+   DO
+      STRING envalue = get env(envar_names[i]);
+      IF envalue = ""
+      THEN
+         IF essential[i]
+         THEN
+            put(stand error, ("get_run_envars(): Essential environment variable is not defined: ", 
+                              envar_names[i], new line));
+            stop
+         FI
+      ELSE
+         envars[i] := envar_names[i] + "=" + envalue
+      FI
+   OD;
+   envars
+);
+
+# Run a command. Any output will go directly to stand out and error. #
+PROC run_command = (STRING cmd) BOOL:
+(
+   BOOL retval := FALSE;
+   FLEX [1:0]STRING envars := get_run_envars;
+   INT pid := execve child("/bin/sh", ("sh", "-c", cmd), envars);
+   IF pid >= 0 
+   THEN
+      INT wstatus := wait pid(pid);
+      (wstatus >= 0 | retval := TRUE)
+   FI;
+   retval
+);
+
+# Run a command in sh and retrieve the output as a string. Adapted from a68g docs. #
+PROC run_command_get_output = (STRING cmd, REF STRING output) BOOL:
+(
+   BOOL retval := FALSE;
+   FLEX [1:0]STRING envars := get_run_envars;
+   IF STRING sh_cmd = " " + cmd + " 2>&1";
+      execve output("/bin/sh", ("sh", "-c", sh_cmd), envars, output) >= 0
+   THEN
+      retval := TRUE
+   FI;
+   retval
+);
+
+# Return a string denoting the OS being used (debian, ubuntu, macos or linux for now). #
+PROC get_os_name = STRING:
+(
+   STRING retval := "unknown";
+   STRING uname_output;
+   IF run_command_get_output("uname -a", uname_output)
+   THEN
+      IF string in string("Debian", NIL, uname_output)
+      THEN
+         retval := "debian"
+      ELIF string in string("Ubuntu", NIL, uname_output)
+      THEN
+         retval := "ubuntu"
+      ELIF string in string("Darwin", NIL, uname_output)
+      THEN
+         retval := "macos"
+      ELIF string in string("Linux", NIL, uname_output)
+      THEN
+         retval := "linux"
+      FI
+   FI;
+   retval
+);
+
+# Get the version of the operating system. Will not work for macos. #
+PROC get_os_version = STRING:
+(
+   CHAR dquot = REPR(34);
+   STRING retval := "unknown";
+   STRING cmd_output;
+   IF file is regular("/etc/os-release")
+   THEN
+      IF run_command_get_output("cat /etc/os-release | grep VERSION_ID", cmd_output)
+      THEN
+         IF string in string("VERSION_ID", NIL, cmd_output)
+         THEN
+            INT last_quote;
+            IF last char in string(dquot, last_quote, cmd_output)
+            THEN
+               retval := cmd_output[13:last_quote-1]
+            FI # last dquot found #
+         FI # VERSION_ID found. #
+      FI # os-release cat worked. #
+   FI; # os-release exists. #
+   retval
+);
+
+# Get the OS and version name. #
+PROC get_os_name_and_version = STRING:
+(
+   get_os_name + "_" + get_os_version
+);
+
+# Get the version of Algol 68 Genie being used. #
+PROC a68g_version = STRING:
+(
+   STRING version := "";
+   STRING version_output := "";
+   CHAR nl = REPR(10);
+
+   IF run_command_get_output("a68g --version", version_output)
+   THEN
+      FOR i TO ELEMS version_output
+      DO
+         (version_output[i] = nl | break1);
+         version +:= version_output[i]
+      OD;
+      break1:
+      SKIP
+   FI;
+
+   version
+);
+
+# Print underlined string. #
+PROC print_underlined = (STRING s) VOID:
+(
+   print((newline, s, newline));
+   print(((ELEMS s)*"=", newline))
+);
+
+# Print a program title in a standard format. #
+PROC print_std_title = (STRING title) VOID:
+(
+   print_underlined(title);
+   print(("Running under ", a68g_version, newline))
+);
+
+# Clear screen of an ANSI terminal. #
+PROC clear_ansi_screen = VOID:
+(
+   print((REPR(27)+"[H"+REPR(27)+"[2J"))
+);
+
+# Set the title bar of an ANSI terminal. Perhaps. #
+PROC set_ansi_title = (STRING title) VOID:
+(
+   print((REPR(27)+"]0;"+title+REPR(7)))
+);
+
+# Get time and date string: yyyy/mm/dd hh:mm:ss #
+PROC date_time_string = (BOOL utc) STRING:
+(
+   [8]INT it := (utc | utc time | local time);
+   STRING retval;
+   putsf(retval, ($4d,"/", 2d, "/", 2d, " ", 2d, ":", 2d, ":", 2d$, 
+                  it[1], it[2], it[3], it[4], it[5], it[6]));
+   retval
+);
+
+# --------------------- #
+# Time arithmetic aids. #
+# --------------------- #
+
+# Mode for hours, minutes, seconds time. #
+# Handling time is *horrendous* and I really don't want to get very far into it! #
+# But a little bit will be useful, hopefully. #
+MODE HMSTIME = STRUCT( INT h, m, s, delta_days, BOOL negative );
+
+# Print a decently formatted HMSTIME. #
+PROC print_hms = (STRING leader, HMSTIME hms) VOID:
+(
+   print((leader,
+          (negative OF hms | "-" | "+"),
+          " D:",wint(delta_days OF hms),
+          " H:",wint(h OF hms),
+          " M:",wint(m OF hms),
+          " S:",wint(s OF hms),newline))
+);
+
+# Convert hours, minutes, seconds to seconds. #
+PROC hms_to_s = (HMSTIME hms) INT:
+(
+   INT isign := (negative OF hms | -1 | 1);
+   isign * (86 400 * (delta_days OF hms) + 3 600 * (h OF hms) + 60 * (m OF hms) + s OF hms)
+);
+
+# Convert seconds to  hours, minutes, seconds. #
+PROC s_to_hms = (INT s) HMSTIME:
+(
+   HMSTIME hms;
+   INT secs := s;
+   negative OF hms := secs < 0;
+   secs := ABS secs;
+   delta_days OF hms := secs % 86 400;
+   secs -:= (86 400 * delta_days OF hms);
+   h OF hms := secs % 3 600;
+   secs -:= (3 600 * h OF hms);
+   m OF hms := secs % 60;
+   secs -:= (60 * m OF hms);
+   s OF hms := secs;
+   hms
+);
+
+# Get the time according to the system clock as an HMSTIME. Get local time or UTC. #
+PROC get_time_of_day = (BOOL utc) HMSTIME:
+(
+   HMSTIME hms;
+   [8]INT itime := (utc | utc time | local time);
+   make_hms(0, itime[4], itime[5], itime[6])
+);
+
+# Get hours offset from UTC for a standard format timezone continent/city string. #
+# Return TRUE and correct offset if the continent/city string is valid, else FALSE and 0 offset. #
+PROC get_utc_offset_hours = (STRING contcity, REF HMSTIME offset) BOOL:
+(
+   BOOL retval := FALSE;
+   set_hms(offset, 0, 0, 0, 0);
+
+   IF file is regular("/usr/share/zoneinfo/"+contcity)
+   THEN
+      STRING s_offset;
+      IF run_command_get_output("TZ="""+contcity+""" date +%z", s_offset)
+      THEN
+         s_offset := trim(s_offset);
+         INT h := string_to_int(s_offset[:3]); # +hh or -hh #
+         INT m := string_to_int(s_offset[4:]); # mm #
+         set_hms(offset, 0, h, m, 0);
+         retval := TRUE
+      FI
+   FI;
+
+   retval
+);
+
+# Make an HMSTIME from its components. If any component is -ve, the thing is -ve. #
+PROC make_hms = (INT d, h, m, s) HMSTIME:
+(
+   HMSTIME hms;
+   set_hms(hms, d, h, m, s);
+   hms
+);
+
+# Set the contents of an HMSTIME from components. #
+PROC set_hms = (REF HMSTIME hms, INT d, h, m, s) VOID:
+(
+   negative OF hms := (d < 0) OR (h < 0) OR (m < 0) OR (s < 0);
+   h OF hms := ABS h;
+   m OF hms := ABS m;
+   s OF hms := ABS s;
+   delta_days OF hms := ABS d
+);
+
+# Define addition for HMSTIME values. #
+OP + = (HMSTIME a, HMSTIME b) HMSTIME:
+(
+   INT secs_a := hms_to_s(a);
+   INT secs_b := hms_to_s(b);
+   INT secs_sum := secs_a + secs_b;
+   s_to_hms(secs_sum)
+);
+
+# Define subtraction for HMSTIME values. #
+OP - = (HMSTIME a, HMSTIME b) HMSTIME:
+(
+   INT secs_a := hms_to_s(a);
+   INT secs_b := hms_to_s(b);
+   INT secs_diff := secs_a - secs_b;
+   s_to_hms(secs_diff)
+);
+
+# Are HMSTIMEs equal? #
+OP = = (HMSTIME a, HMSTIME b) BOOL:
+(
+   INT secs_a := hms_to_s(a);
+   INT secs_b := hms_to_s(b);
+   INT secs_diff := secs_a - secs_b;
+   secs_diff = 0
+);
+
+# Is HMSTIME a less/earlier than b? #
+OP < = (HMSTIME a, HMSTIME b) BOOL:
+(
+   INT secs_a := hms_to_s(a);
+   INT secs_b := hms_to_s(b);
+   INT secs_diff := secs_a - secs_b;
+   secs_diff < 0
+);
+
+# Are HMSTIME a greater/later than b? #
+OP > = (HMSTIME a, HMSTIME b) BOOL:
+(
+   INT secs_a := hms_to_s(a);
+   INT secs_b := hms_to_s(b);
+   INT secs_diff := secs_a - secs_b;
+   secs_diff > 0
+);
+
+
+# ------------------------ #
+# Numeric range etc. aids. #
+# ------------------------ #
+
+# Degrees to radians operator. #
+OP DEGRAD = (REAL a) REAL : 
+   (a * pi / 180.0);
+
+# Radians to degrees operator. #
+OP RADDEG = (REAL a) REAL: 
+   (180.0 * a / pi);
+
+# Check v is in the range lo to hi inclusive. #
+PROC check_in_range_int = (INT v, lo, hi) BOOL:
+(
+   (v < lo | FALSE | ((v > hi) | FALSE | TRUE))
+);
+
+# Clamp integer values. #
+PROC clamp_int = (INT v, lo, hi) INT:
+(
+   (v < lo | lo | ((v > hi) | hi | v))
+);
+
+# Clamp integer to unsigned byte range. #
+PROC clamp_255 = (INT v) INT:
+(
+   clamp_int(v, 0, 255)
+);
+
+# Clamp real values. #
+PROC clamp_real = (REAL v, lo, hi) REAL:
+(
+   (v < lo | lo | ((v > hi) | hi | v))
+);
+
+# Min of pairs of integer values. #
+PROC min2int = (INT a, b) INT:
+(
+   (a < b | a | b )
+);
+
+# Max of pairs of integer values. #
+PROC max2int = (INT a, b) INT:
+(
+   (a > b | a | b )
+);
+
+# ----------------------------------------------- #
+# String aids incl extensive string <--> numeric. #
+# ----------------------------------------------- #
+
+# Minimum width string from integer. #
+PROC wint = (INT i) STRING:
+   whole(i, 0);
+
+# Return a dollar quoted version of a string. #
+PROC doll = (STRING s) STRING:
+   "$"+s+"$";
+
+# Split a string on a character to a row of strings. #
+PROC split_string = (STRING s, CHAR c) []STRING:
+(
+   INT string_length := ELEMS s;
+   INT n_words := 0, n_seps := 0;
+   FLEX [1:0] STRING return;
+
+   # Count seperator characters c in s. #
+   FOR i TO string_length
+   DO
+      (s[i] = c | n_seps +:=1)
+   OD;
+
+   # No separators, but some characters => single word not ending in a separator. #
+   ((n_seps = 0) AND (string_length > 0) | n_words := 1 | n_words := n_seps);
+
+   IF n_words = 0
+   THEN
+      # Empty string s. Return single element row, element set to empty string. #
+      [1]STRING result;
+      result[1] := "";
+      return := result
+
+   ELSE
+      # String s has one or more words. #
+      # If there were separators and s doesn't end in a separator, there is 1 more word than separators. #
+      (n_seps > 0 AND s[string_length] /= c | n_words +:= 1);
+
+      # Split the string into n_words string elements. #
+      [n_words]STRING result;
+      INT i_word := 0;
+      INT j := 0; # Index in s of last found separator character. #
+      FOR i TO string_length
+      DO
+         IF s[i] = c
+         THEN
+            i_word +:= 1;
+            result[i_word] := s[j+1:i-1];
+            j := i
+         FI
+      OD;
+
+      # Get any trailing word after the last separator. #
+      (j /= string_length | i_word +:= 1; result[i_word] := s[j+1:]);
+      return := result
+   FI;
+
+   return
+);
+
+# Join a row of strings together into a single string, separating each with character c. #
+PROC join_string = ([]STRING s, CHAR c) STRING:
+(
+   INT n_words := ELEMS s;
+   STRING result := "";
+
+   FOR i TO n_words
+   DO
+      result +:= s[i];
+      (i < n_words | result +:= c)
+   OD;
+
+   result
+);
+ 
+# Index of string in a row of strings. 0 if not found. #
+PROC string_in_row_of_strings = (STRING s, []STRING r) INT:
+(
+   INT retval := 0;
+   FOR i TO ELEMS r
+   DO
+      (s = r[i] | retval := i; done)
+   OD;
+   done:
+   retval
+);
+
+# Trim leading blanks from a string. #
+PROC trim_leading = (STRING s) STRING:
+(
+   STRING return := "";
+   INT string_length := ELEMS s;
+   FOR i TO string_length
+   DO
+      (NOT is space(s[i]) | return := s[i:]; GOTO done)
+   OD;
+   done:
+   return
+);
+
+# Trim trailing blanks from a string. #
+PROC trim_trailing = (STRING s) STRING:
+(
+   STRING return := "";
+   INT string_length := ELEMS s;
+   FOR i FROM string_length BY -1 TO 1
+   DO
+      (NOT is space(s[i]) | return := s[:i]; GOTO done)
+   OD;
+   done:
+   return
+);
+
+# Trim leading and trailing blanks from a string. #
+PROC trim = (STRING s) STRING:
+(
+   trim_leading( trim_trailing(s) )
+);
+
+# Change the case of a string to lower. #
+PROC string_to_lower = (STRING s) STRING:
+(
+   STRING return := "";
+   FOR i TO ELEMS s
+   DO
+      return +:= to lower(s[i])
+   OD;
+   return
+);
+
+# Change the case of a string to upper. #
+PROC string_to_upper = (STRING s) STRING:
+(
+   STRING return := "";
+   FOR i TO ELEMS s
+   DO
+      return +:= to upper(s[i])
+   OD;
+   return
+);
+
+# Remove space characters from a string. #
+PROC despace = (STRING s) STRING:
+(
+   STRING return := "";
+   FOR i TO ELEMS s
+   DO
+      (NOT is space(s[i]) | return +:= s[i])
+   OD;
+   return 
+);
+
+# Remove all white space from a string. Same as despace() currently. #
+PROC strip_blank = (STRING s) STRING:
+(
+   despace(s)
+);
+
+# Remove c characters from a string. #
+PROC strip_char = (STRING s, CHAR c) STRING:
+(
+   STRING return := "";
+   FOR i TO ELEMS s
+   DO
+      (c /= s[i] | return +:= s[i])
+   OD;
+   return 
+);
+
+# Replace the first or all occurrences of character old with character new in string s. #
+PROC replace_char = (STRING s, CHAR old, CHAR new, BOOL all) STRING:
+(
+   STRING retval := s;
+   FOR i TO ELEMS s
+   DO
+      (s[i] = old | retval[i] := new; (NOT all | break1))
+   OD;
+   break1:
+   retval
+);
+
+# Replace the first or all occurrences of string old with string new in string s. #
+PROC replace_string = (STRING s, STRING old, STRING new, BOOL all) STRING:
+(
+   INT pos;
+   INT start := 1;
+   STRING changed := "";
+   (old = "" | break1); # Beware  - pathological possibility. # 
+   INT n_old := ELEMS old;
+   WHILE string in string(old, pos, s[start:])
+   DO
+      pos +:= start - 1;
+      STRING before := s[start:pos-1];
+      changed +:= (before + new);
+      start := pos + n_old;
+      (NOT all | break1)
+   OD;
+   break1:
+   changed +:= s[start:];
+   changed
+);
+
+# Check if a string is in a comma separated list of valid strings. #
+PROC check_valid = (STRING test, STRING valid) BOOL:
+(
+   FLEX [1:0]STRING valids := split_string(valid, ",");
+   string_in_row_of_strings(test, valids) > 0
+);
+
+# Convert a string to a "choice" index by searching for it in a #
+# comma separated list of choice strings. #
+PROC string_to_choice_index = (STRING test, STRING choices) INT:
+(
+   INT retval := 0;
+   []STRING split_choices = split_string(choices, ",");
+   FOR i TO ELEMS split_choices
+   DO
+      (test = split_choices[i] | retval := i; done)
+   OD;
+   done:
+   retval
+);
+
+# Convert a string to a BOOL. Accept true and false in any combination of case. #
+PROC string_to_bool = (STRING s) BOOL:
+(
+   BOOL retval := FALSE;
+   STRING slow := string_to_lower(s);
+   (slow = "true" | retval := TRUE; done);
+   (slow = "false" | done);
+   put(stand error, ("string_to_bool(): ",s," not recognised, returning FALSE.",new line));
+   done:
+   retval
+);
+
+# Check string only contains upper case letters. #
+PROC all_upper = (STRING s) BOOL:
+(
+   BOOL yes := (ELEMS s > 0);
+   FOR i TO ELEMS s DO (NOT is upper(s[i]) | (yes := FALSE; done)) OD;
+   done:
+   yes
+);
+
+# Check string only contains lower case letters. Allow underscores too. #
+PROC all_lower = (STRING s) BOOL:
+(
+   BOOL yes := (ELEMS s > 0);
+   FOR i TO ELEMS s DO (NOT (is lower(s[i]) OR (s[i] = "_")) | (yes := FALSE; done)) OD;
+   done:
+   yes
+);
+
+# Check string only contains decimal digits. #
+PROC all_digits = (STRING s) BOOL:
+(
+   BOOL yes := (ELEMS s > 0);
+   FOR i TO ELEMS s DO (NOT is digit(s[i]) | (yes := FALSE; done)) OD;
+   done:
+   yes
+);
+
+# Check string only contains decimal digits after an optional sign. #
+PROC all_digits_signed = (STRING s) BOOL:
+(
+   BOOL retval := FALSE;
+   ((ELEMS s < 1) | retval := FALSE |
+         ((s[1] = "-") OR (s[1] = "+") | retval := all_digits(s[2:]) |
+               retval := all_digits(s)));
+   retval
+);
+
+# Check string only contains hexadecimal digits. #
+PROC all_hexdigits = (STRING s) BOOL:
+(
+   BOOL yes := (ELEMS s > 0);
+   FOR i TO ELEMS s DO (NOT is xdigit(s[i]) | (yes := FALSE; done)) OD;
+   done:
+   yes
+);
+
+# String to integer. NOTE: I don't know how to use event routines with string transput ... #
+# Actually, I think associate is the answer, but never mind. #
+PROC string_to_int = (STRING s) INT:
+(
+   INT retval := 0, sign := 1;
+   STRING ls := trim(s);
+   IF ELEMS ls > 0
+   THEN
+      (ls[1] = "-" | ls := ls[2:]; sign := -1);
+      (ls[1] = "+" | ls := ls[2:]);
+      (all_digits(ls) | gets(ls, (retval)))
+   FI;
+   sign * retval
+);
+
+# Convert a hex digit to an INT. Return -1 for illegal characters. #
+PROC hex_char_to_int = (CHAR c) INT:
+(
+   INT retval := -1;
+   (NOT is xdigit(c) | done);
+   INT cval := ABS c;
+   (cval < 58  | retval := cval - 48; done);       # 0 to 9 #
+   (cval < 71  | retval := cval - 65 + 10; done);  # A to F #
+   (cval < 103 | retval := cval - 97 + 10; done);  # a to f #
+   done:
+   retval
+);
+
+# Convert an array of INTs to a string. Aid to parsing binary data. #
+PROC int_array_to_string = ([]INT array) STRING:
+(
+   STRING s := "";
+   FOR i TO ELEMS array
+   DO
+      (array[i] > 0 AND array[i] < 256 | s +:= REPR array[i])
+   OD;
+   s
+);
+
+# Another string to integer routine. Start at s[b], return v, increment p. #
+PROC ifromc = (STRING s, REF INT v, INT b, REF INT p) BOOL:
+(
+   INT j, isign, ndused, ib;
+   BOOL retval := TRUE;
+   ib := b;
+
+   # Leading sign? #
+   isign := 1;
+   ( s[ib] = "-" | isign := -1; ib +:= 1 |
+         ( s[ib] = "+" | ib +:= 1));
+
+   # Convert the value. Guard against integer overflow. #
+   v := 0;
+   p := ELEMS s;
+   ndused := 0;
+   FOR i FROM ib TO ELEMS s
+   DO
+      j := ( is digit(s[i]) | (ABS s[i] - ABS "0") | -1);
+      IF j < 0
+      THEN
+         ( i = ib | retval := FALSE );
+         p := i;
+         int_done
+      ELSE
+         ( ndused < 9 | v := 10 * v + j; ndused +:= 1 )
+      FI
+   OD;
+
+   # Finalise. #
+   int_done:
+   v *:= isign;
+   retval
+);
+
+# String to real. If use_all_s, return status will be FALSE unless s has no trailing non-float chars. #
+# Otherwise, return status will be TRUE if s is a valid representation of a floating point number.  #
+PROC string_to_real = (STRING s, REF REAL v, BOOL use_all_s) BOOL:
+(
+   INT p := 1; # Start at the first character of s. #
+   string_to_real_internal(s, v, use_all_s, p, TRUE)
+);
+
+# String to real, accounting for standard SI metric prefixes. #
+# They should follow the number, maybe after a space. #
+PROC si_string_to_real = (STRING s, REF REAL v, REF STRING units) BOOL:
+(
+   v := 0.0;
+   units := "";
+
+   INT iexp := 0;
+   BOOL retval := FALSE;
+
+   # Define known prefix codes and associated powers of 10. #
+   MODE PREFIX_EXP = STRUCT(STRING prefix, INT exp);
+   []PREFIX_EXP pe_table = (("Q", 30),("R", 27),("Y", 24),("Z", 21),("E", 18),
+                            ("P", 15),("T", 12),("G",  9),("M",  6),("k",  3),
+                            ("h",  2),("da", 1),("d", -1),("c", -2),("m", -3),
+                            ("u", -6),("n", -9),("p",-12),("f",-15),("a",-18),
+                            ("z",-21),("y",-24),("r",-27),("q",-30));
+
+   # Get a REAL value from a version of s with all white space removed. #
+   REAL no_prefix_v := 0.0;
+   STRING despaced_s := despace(s);
+   INT p := 1; # Start at the first character of s. #
+   (NOT string_to_real_internal(despaced_s, no_prefix_v, FALSE, p, FALSE) | done);
+
+   # If p is at the last character in s, we are done. BUT ONLY if the last character is a digit. #
+   # p may be at a valid prefix. #
+   IF (p /= ELEMS despaced_s) OR (NOT is digit(despaced_s[p]))
+   THEN
+      INT prefix_length := 0;
+
+      # See if s[p+1:] is a valid 'metric prefix' #
+      FOR i TO ELEMS pe_table
+      DO
+         (begins_with(despaced_s[p:], prefix OF pe_table[i]) | 
+                iexp := exp OF pe_table[i]; 
+                retval := TRUE; 
+                prefix_length := ELEMS (prefix OF pe_table[i]);
+                break_a)
+      OD;
+      break_a:
+
+      # Are there also units? If so, extract them. #
+      IF retval
+      THEN
+         p +:= prefix_length;
+         (p <= ELEMS despaced_s | units := despaced_s[p:])
+      FI
+   ELSE
+      retval := TRUE # Numbers with no prefix are still valid. #
+   FI;
+
+   # Scale the no prefix value. #
+   v := no_prefix_v * (10.0 ** iexp);
+   
+   done:
+   retval
+);
+
+# Convert a real number to a scaled real number with an appropriate SI prefix. #
+# If do_small is TRUE, use hecto, deca, deci and centi otherwise use only 10**3n prefixes. #
+# This is quite hard to get right, and I'm not certain I have in all cases! #
+# #
+# This variant uses u for micro prefix and is suitable for all output (command line, etc.). #
+PROC real_to_si_real = (REAL v, REF REAL v_out, REF STRING prefix, BOOL do_small) BOOL:
+(
+   real_to_si_real_internal(v, v_out, prefix, do_small, FALSE)
+);
+
+# This variant uses an above 7 bit code for micro. DSURF will map this to Unicode for Greek mu. #
+PROC real_to_si_real_dsurf = (REAL v, REF REAL v_out, REF STRING prefix, BOOL do_small) BOOL:
+(
+   real_to_si_real_internal(v, v_out, prefix, do_small, TRUE)
+);
+
+# Do all the work of real_to_si_real() and real_to_si_real_dsurf(). #
+PROC real_to_si_real_internal = (REAL v, REF REAL v_out, REF STRING prefix, BOOL do_small, BOOL do_mu) BOOL:
+(
+   BOOL retval := FALSE;
+   prefix := "";
+   STRING mu := (do_mu | REPR 223 | "u");
+
+   # If |v| is > 10**33 or < 10**-33, just return v. No defined prefixes for these. #
+   (ABS(v) > 1.0E33 OR ABS(v) < 1.0E-33 | v_out := v; done);
+
+   # Define known prefix codes and associated powers of 10. Try to #
+   MODE PREFIX_EXP = STRUCT(STRING prefix, INT exp);
+   []PREFIX_EXP pe_table = (("Q", 30),("R", 27),("Y", 24),("Z", 21),("E", 18),
+                            ("P", 15),("T", 12),("G",  9),("M",  6),("k",  3),
+                            ("m", -3),(mu,  -6),("n", -9),("p",-12),("f",-15),
+                            ("a",-18),("z",-21),("y",-24),("r",-27),("q",-30));
+
+   []PREFIX_EXP sm_table = (("h",  2),("da", 1),("",   0),("d", -1),("c", -2));
+
+   # If |v| is between 1/100 (or 1/10) and 1000, perhaps no prefix is required. #
+   REAL v_div := 0.0;
+   REAL min_no_prefix := ( do_small | 0.01 | 0.1 );
+   IF ABS(v) < 1000.0 AND ABS(v) > min_no_prefix
+   THEN
+      IF do_small
+      THEN
+         # Prefix required for small numbers (using multiples of 10). Find it. #
+         FOR i TO ELEMS sm_table
+         DO
+            v_div := v / (10.0 ** (exp OF sm_table[i]));
+            (ABS(v_div) < 10.0 AND ABS(v_div) >= 1.0 | 
+                  prefix := (prefix OF sm_table[i]); retval := TRUE; break_b)
+         OD;
+         break_b:
+         v_out := v_div
+      ELSE
+         # No prefix required. Just leave as is. #
+         v_out := v; 
+         retval := TRUE
+      FI;
+      done
+   FI;
+
+   # Go through all possible prefixes dividing by their exponent until we get a result #
+   # between 1.0 (inclusive) and 1000.0 (exclusive). Use only multiple of 3 exponents. #
+   FOR i TO ELEMS pe_table
+   DO
+      v_div := v / (10.0 ** (exp OF pe_table[i]));
+      (ABS(v_div) < 1000.0 AND ABS(v_div) >= 1.0 | 
+            prefix := (prefix OF pe_table[i]); retval := TRUE; break_a)
+   OD;
+   break_a:
+
+   # Format the result. #
+   v_out := v_div;
+
+   done:
+   retval
+);
+
+# Convert a real number to a scaled real number with an appropriate SI prefix, as a string. #
+# The scaled number before the prefix will have width characters, after after the decimal pt. E.g. 8, 3 #
+PROC real_to_si_string = (REAL v, REF STRING s, INT width, after, BOOL do_small) BOOL:
+(
+   BOOL retval := FALSE;
+   REAL v_out := 0.0;
+   STRING prefix := "";
+   
+   # Convert v to a number in the range [1 : 1000) with a prefix or [0 : 0.001] with no prefix. #
+   retval := real_to_si_real(v, v_out, prefix, do_small);
+   (NOT retval | done);
+
+   # Format the result v_out as a string with a prefix. #
+   s := trim_trailing(fixed(v_out, width, after) + " " + prefix);
+
+   # Return. #
+   done:
+   retval
+);
+
+# Convert a real number to a scaled real number with an appropriate SI prefix, as a scaled integer. #
+# The scaled integer will have n_digits and should be displayed with dp (returned) digits after the #
+# decimal point. This is for use primarily with vcpgui's 'numeric display' component. #
+PROC real_to_si_real_scaled = (REAL v, REF INT iv_out, INT n_digits, 
+                               REF STRING prefix, REF INT dp, BOOL do_small) BOOL:
+(
+   real_to_si_real_scaled_internal(v, iv_out, n_digits, prefix, dp, do_small, FALSE) 
+);
+
+# Variant of real_to_si_real_scaled() for DSURF to display Greek mu for micro. #
+PROC real_to_si_real_scaled_dsurf = (REAL v, REF INT iv_out, INT n_digits, 
+                                     REF STRING prefix, REF INT dp, BOOL do_small) BOOL:
+(
+   real_to_si_real_scaled_internal(v, iv_out, n_digits, prefix, dp, do_small, TRUE)
+);
+
+# Handle most of both real_to_si_real_scaled() and real_to_si_real_scaled_dsurf(). #
+PROC real_to_si_real_scaled_internal = (REAL v, REF INT iv_out, INT n_digits, 
+                                        REF STRING prefix, REF INT dp, BOOL do_small, BOOL do_mu) BOOL:
+(
+   BOOL retval := FALSE;
+   REAL v_out := 0.0;
+   
+   # Convert v to a number in the range [1 : 1000) with a prefix or [0 : 0.001] with no prefix. #
+   retval := real_to_si_real_internal(v, v_out, prefix, do_small, do_mu);
+   (NOT retval | done);
+
+   # See how many digits we have in the SI scaled real after the decimal point. #
+   REAL log_v := log(ABS v_out);
+   INT n_ints := TRUNC log_v + ((SIGN log_v) < 0 | 0 | 1);
+   dp := n_digits - n_ints;
+
+   # Scale to an integer. #
+   iv_out := TRUNC (v_out * (10.0 ** dp));
+
+   done:
+   retval
+);
+
+# Do the real work of string to real. This uses and returns (modified) start character index in p. #
+# If exp_ok is FALSE, this will not attempt to process exponents (scientific notation). This is for #
+# use with si_string_to_real(), where the prefix E (exa) may be read as an exponent. #
+PROC string_to_real_internal = (STRING s, REF REAL v, BOOL use_all_s, REF INT p, BOOL exp_ok) BOOL:
+(
+   # Start with no integer part of mantissa, no decimal part, no exponent. #
+   BOOL giman := FALSE; # Got integer part of mantissa? #
+   BOOL gdman := FALSE; # Got decimal part of mantissa? #
+   BOOL ge := FALSE;    # Got exponent? #
+   BOOL gdp := FALSE;   # Got a decimal point? #
+
+   # Parts of the floating point number as integers. #
+   INT islen := ELEMS s; # Length of the string. #
+   INT iman := 0;        # Mantissa before decimal point. #
+   INT idman := 0;       # Mantissa after decimal point. #
+   INT ndman := 0;       # Number of mantissa digits after dp. #
+   INT iexp := 0;        # Exponent. #
+
+   # Floating point number to return. #
+   v := 0.0;
+   BOOL retval := FALSE; # Assume invalid. #
+   REAL sign := 1.0;     # Sign of mantissa. #
+   REAL esign := 1.0;    # Sign of exponent. #
+   REAL dman := 0.0;     # Value of mantissa after dp. #
+
+   # Current character index. #
+   INT np := 0; # Updated temp p. #
+
+   # Process a leading sign, if any. #
+   IF s[p] = "+"
+   THEN
+      p +:= 1; (p > islen | fp_format_error)
+   ELIF s[p] = "-"
+   THEN
+      p +:= 1; (p > islen | fp_format_error);
+      sign := -1.0
+   FI;
+
+   # Attempt to convert the integer part of the mantissa. If start with . this is 0. #
+   IF s[p] = "."
+   THEN
+      iman := 0;
+      gdp := TRUE;
+      p +:= 1; (p > islen | fp_format_error)
+   ELSE
+      (NOT is digit(s[p]) | fp_format_error);
+      (NOT ifromc(s, iman, p, np) | fp_format_error);
+      p := np;
+      giman := TRUE
+   FI;
+
+   # No leading . but maybe . now. Illegal if we haven't got int part of mantissa already.  #
+   IF s[p] = "."
+   THEN
+      ( NOT giman | fp_format_error );
+      gdp := TRUE;
+      p +:= 1; (p > islen | fp_format_error)
+   FI;
+
+   # The next character must be: a) start of exponent, or b) start of decimal part of mantissa #
+   # or c) end of number. If we are not processing exponents and get E/e, try assembling a number now. #
+   IF (s[p] = "E") OR (s[p] = "e")
+   THEN
+      (NOT exp_ok | assemble_now);
+      ge := TRUE;
+      idman := 0;
+      p +:= 1; (p > islen | fp_format_error)
+   ELSE
+      IF is digit(s[p]) AND gdp
+      THEN
+         (NOT ifromc(s, idman, p, np) | fp_format_error);
+         # Work out number of decimal places in mantissa. BUT if we have reached the end of #
+         # the string AND the last character is a digit, we must adjust that count - BUT NOT #
+         # if the last character is a NON DIGIT. #
+         ndman := np - p;
+         (np = islen AND is digit(s[np]) | ndman +:= 1);
+         p := np;
+         gdman := TRUE
+      FI
+   FI;
+
+   # We must now have the integer or decimal parts of the mantissa or both. #
+   ( (NOT giman) AND (NOT gdman) | fp_format_error );
+
+   # If next character is e and we have not already got exponent start, #
+   # then it could be start of exponent unless we do not want  exponents. #
+   IF (NOT ge) AND ((s[p] = "E") OR (s[p] = "e"))
+   THEN
+      (NOT exp_ok | assemble_now);
+      ge := TRUE;
+      p +:= 1; (p > islen | fp_format_error)
+   FI;
+
+   # If we are at the start of the exponent, get it. #
+   IF ge
+   THEN
+      (s[p] = "+" | (p +:= 1; (p > islen | fp_format_error)) |
+            (s[p] = "-" | esign := -1.0; p +:= 1; (p > islen | fp_format_error)));
+      (NOT is digit(s[p]) | fp_format_error);
+      (NOT ifromc(s, iexp, p, np ) | fp_format_error);
+      p := np
+   FI;
+
+   # Assemble the final real number. #
+   assemble_now:
+   (gdman | dman := REAL(idman) / (10.0 ** min2int(ndman,9)) | dman := 0.0); # Mantissa, after dp. #
+   v := (sign * (REAL(iman) + dman)); # The whole mantissa. #
+   ((ABS iexp) > 307 | fp_format_error); # Must be < 10**308  #
+   (ge | v *:= (10.0 ** (esign * REAL(iexp)))); # With any exponent. #
+
+   # It worked. Status depends on whether all of s should have been used, though. #
+   retval := (p = islen | TRUE | NOT use_all_s);
+
+   # Format errors come here with retval still FALSE. #
+   fp_format_error:
+   retval
+);
+
+# Count how many times a character occurs in a string. #
+PROC count_char_occurrences = (CHAR c, STRING s) INT:
+(
+   INT n_occur := 0;
+   FOR i FROM LWB s TO UPB s
+   DO
+      (s[i] = c | n_occur +:= 1)
+   OD;
+   n_occur
+);
+
+# Does string s begin with string b? #
+PROC begins_with = (STRING s, STRING b) BOOL:
+(
+   BOOL retval := FALSE;
+   (ELEMS b = 0 OR ELEMS s = 0 | done);
+   (ELEMS s >= ELEMS b | retval := s[:ELEMS b] = b);
+   done:
+   retval
+);
+
+# Does string s end with string b? #
+PROC ends_with = (STRING s, STRING b) BOOL:
+(
+   BOOL retval := FALSE;
+   ((ELEMS s) >= (ELEMS b) | retval := s[(ELEMS s)-(ELEMS b)+1:] = b);
+   retval
+);
+
+
+# ---------- #
+# File aids. #
+# ---------- #
+
+# Open a "regular" file. a68g open() only checks if a file exists when reading #
+# at the time of the first i/o operation. This function behaves more like Unix fopen()/open(). #
+# Note that modes r and w do not allow seeking or binary i/o. Use r+ or w+ for those capabilities. #
+# HOWEVER: binary does NOT mean 'raw bytes'. It is much more like FORTRAN UNFORMATTED. #
+# Now also supports appending with a and a+. #
+PROC open_file = (STRING filename, STRING mode, REF FILE fio) INT:
+(
+   reset errno; # Set system error to 0. #
+
+   # Field open errors. The value returned by a68g open() says whether #
+   # the file is 'regular' or not. It doesn't encode success or failure as such. #
+   # Actually ... I don't see how to use on open error. What should the first argument be? #
+   # It can't be the REF FILE being opened (fio), because that hasn't been set yet. #
+   # I'm also not convinced it ever gets called. #
+   BOOL fopen_error := FALSE;
+   PROC field on open error = (REF FILE afio) BOOL: ( fopen_error := TRUE; TRUE );
+   on open error(stand in, field on open error);
+   INT ret_error := 0;
+
+   # If reading, check the file exists as a "regular" file. #
+   IF mode = "r"
+   THEN
+      (NOT file is regular(filename) | ret_error := errno; done);
+      VOID(open(fio, filename, stand in channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Read, write, seek. File must already exist. #
+   ELIF mode = "r+"
+   THEN
+      (NOT file is regular(filename) | ret_error := errno; done);
+      VOID(open(fio, filename, stand back channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Writing. #
+   ELIF mode = "w"
+   THEN
+      VOID(open(fio, filename, stand out channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Write, read, seek. File may not already exist. #
+   ELIF mode = "w+"
+   THEN
+      VOID(open(fio, filename, stand back channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Appending. #
+   ELIF mode = "a"
+   THEN
+      VOID(append(fio, filename, stand out channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Append, read, seek. File may not already exist. #
+   ELIF mode = "a+"
+   THEN
+      VOID(append(fio, filename, stand back channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Unsupported file mode string. #
+   ELSE
+      ret_error := 22 # Invalid argument. #
+   FI;
+
+   # Return errno. 0 if OK. #
+   done:
+   ret_error
+);
+
+# Open a character device. #
+PROC open_chardev = (STRING devname, STRING mode, REF FILE fio) INT:
+(
+   reset errno; # Set system error to 0. #
+
+   # Field open errors. The value returned by a68g open() says whether #
+   # the file is 'regular' or not. It doesn't encode success or failure as such. #
+   # See comment in open_file(). #
+   BOOL fopen_error := FALSE;
+   PROC field on open error = (REF FILE afio) BOOL: ( fopen_error := TRUE; TRUE );
+   on open error(stand in, field on open error);
+   INT ret_error := 0;
+
+   # In all cases, the file must be an extant character device. #
+   (NOT file is char device(devname) | ret_error := errno; done);
+
+   # Read only. No binary. No seek. #
+   IF mode = "r"
+   THEN
+      VOID(open(fio, devname, stand in channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Read and write. Binary OK. Seek OK. #
+   ELIF (mode = "r+") OR (mode = "w+")
+   THEN
+      VOID(open(fio, devname, stand back channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Write only. No binary. No seek. #
+   ELIF mode = "w"
+   THEN
+      VOID(open(fio, devname, stand out channel));
+      (fopen_error | ret_error := errno; done)
+
+   # Unsupported file mode string. #
+   ELSE
+      ret_error := 22 # Invalid argument. #
+   FI;
+
+   done:
+   ret_error
+);
+
+# Append all elements of a row of strings to a file called filename. #
+# If that file doesn't exist, create it. #
+PROC append_lines = ([]STRING lines, STRING filename) INT:
+(
+   FILE fout;
+   INT retval := open_file(filename, "a", fout);
+   IF retval = 0
+   THEN
+      FOR i TO ELEMS lines
+      DO
+         put(fout, (lines[i], new line))
+      OD;
+      close(fout)
+   FI;
+   retval
+);
+
+# Mode for a pair of strings. Very useful for file paths and file names. #
+MODE STRINGPAIR = STRUCT(STRING first, STRING last);
+
+# Split a path name into a path and an extension. #
+# Intended to work as per Python splitext. #
+PROC splitext = (STRING pathname) STRINGPAIR:
+(
+   INT dotpos, slashpos;
+   STRINGPAIR result := ("", "");
+
+   (pathname = "" | done);
+
+   IF last char in string(".", dotpos, pathname)
+   THEN
+      (dotpos > 1 | first OF result := pathname[:dotpos-1]);
+      (first OF result = "" | first OF result := pathname[dotpos:] |
+            last OF result := pathname[dotpos:]);
+
+      # Try to handle pathological cases like a/b....jpg #
+      # This mimics Python, although I'm not certain that is always desirable for this case. #
+      # In fact, after some unfortunate experiences, I am pretty sure it is a bad idea. #
+      (last char in string("/", slashpos, pathname) | slashpos +:= 1 | slashpos := 1);
+      slashpos := clamp_int(slashpos, 1, ELEMS pathname);
+      (string in string("."+(last OF result), NIL, pathname[slashpos:]) | first OF result := pathname; last OF result := "")
+   ELSE
+      first OF result := pathname
+   FI;
+
+   done:
+   result
+);
+
+# Split a pathname into a pair by cleaving off what is after the last / (if any). #
+# Leave a trailing / on the first part of the split string.   #
+PROC splitpath = (STRING pathname) STRINGPAIR:
+(
+   INT slashpos;
+   STRINGPAIR result := ("", "");
+   INT n := ELEMS pathname;
+
+   (pathname = "" | done);
+
+   IF last char in string("/", slashpos, pathname)
+   THEN
+      (slashpos < n | 
+            first OF result := pathname[:slashpos];
+            last OF result := pathname[slashpos+1:] |
+               first OF result := pathname)
+   ELSE
+      first OF result := pathname
+   FI;
+
+   done:
+   result   
+);
+
+# Do some (but by no means all) clean up of a path to make in canonical. #
+PROC cleanpath = (STRING pathname) STRING:
+(
+   STRING result := pathname;
+   (begins_with(pathname, "./") | result := get pwd + pathname[2:]);
+   (begins_with(pathname, "~/") | result := get_home_dir + pathname[3:]);
+   # Need to deal with ../ sequences ... but not yet! #
+   result
+);
+
+# Split a string at the first occurrence of a given character. #
+PROC splitfirst = (STRING s, CHAR c) STRINGPAIR:
+(
+   INT charpos;
+   STRINGPAIR result := ("", "");
+   INT n := ELEMS s;
+
+   (s = "" | done);
+
+   IF char in string(c, charpos, s)
+   THEN
+      (charpos < n AND charpos > 1 | 
+            first OF result := s[:charpos-1];
+            last OF result := s[charpos+1:] |
+               first OF result := s)
+   ELSE
+      first OF result := s
+   FI;
+
+   done:
+   result   
+);
+
+# Split a string at the last occurrence of a given character. #
+PROC splitlast = (STRING s, CHAR c) STRINGPAIR:
+(
+   INT charpos;
+   STRINGPAIR result := ("", "");
+   INT n := ELEMS s;
+
+   (s = "" | done);
+
+   IF last char in string(c, charpos, s)
+   THEN
+      (charpos < n AND charpos > 1 | 
+            first OF result := s[:charpos-1];
+            last OF result := s[charpos+1:] |
+               first OF result := s)
+   ELSE
+      first OF result := s
+   FI;
+
+   done:
+   result   
+);
+
+# Join a string pair into a string. #
+PROC joinpair = (STRINGPAIR pair) STRING:
+(
+   (first OF pair) + (last OF pair)
+);
+
+# Print a string pair. #
+PROC print_string_pair = (STRINGPAIR p) VOID:
+(
+   print(("[",first OF p,"][",last OF p,"]",new line))
+);
+
+# Copy the contents of an entire file to an open output file. Optionally trim white space. #
+PROC copy_file_contents = (STRING filename, REF FILE fout, BOOL trimspaces) BOOL:
+(
+   BOOL retval := FALSE;
+
+   # Open the input file. #
+   FILE fin;
+   INT status := open_file(filename, "r", fin);
+   (status /= 0 |
+         print_os_error("copy_file_contents(): Cannot open source file", status); 
+         done);
+
+   # Read the file in units of newline terminated lines. #
+   BOOL eof := FALSE;
+   PROC at_eof = (REF FILE afin) BOOL: ( eof := TRUE );
+   STRING input_line;
+   on file end(fin, at_eof);
+
+   DO
+      get(fin, (input_line, new line)); (eof | file_end);
+      (trimspaces | input_line := trim(input_line));
+      put(fout, (input_line, new line))
+   OD;
+
+   # Read success. Close input. #
+   file_end:
+   close(fin);
+   retval := TRUE;
+
+   done:
+   retval
+);
+
+# Function mode for functions called by all_files to process a file. #
+# If this function returns TRUE, stop traversing the file tree. #
+MODE ALL_FILES_PROC = PROC (STRING) BOOL;
+
+# Function mode for sorting an array of strings. #
+MODE STRING_SORT_PROC = PROC ([]STRING) []STRING;
+
+PROC default_string_sort = ([]STRING in) []STRING:
+(
+   SORT in
+);
+
+# Find files with specified extensions in a directory tree and potentially #
+# run a function on them. If no_recurse, do not descend into directories (single level). #
+# If yield_dirs, call the action function on directory names as well as leaf files. #
+PROC all_files = (STRING root, STRING exts, ALL_FILES_PROC action, BOOL no_recurse, BOOL yield_dirs) VOID:
+(
+   all_files_ex(root, exts, action, no_recurse, yield_dirs, default_string_sort)
+);
+
+# As all_files(), but allow a custom sorting function for file names be specified. #
+PROC all_files_ex = (STRING root, STRING exts, ALL_FILES_PROC action, BOOL no_recurse, BOOL yield_dirs,
+                     STRING_SORT_PROC sorter) VOID:
+(
+   FLEX [1:0]STRING cur_files := sorter( get directory(root) );
+   FOR i TO ELEMS cur_files
+   DO
+      IF NOT (cur_files[i] = "." OR cur_files[i] = "..")
+      THEN
+         STRING cur_file := root + "/" + cur_files[i];
+         IF file is directory(cur_file) AND NOT no_recurse
+         THEN
+            (yield_dirs | (action(cur_file) | done));
+            all_files_ex(cur_file, exts, action, no_recurse, yield_dirs, sorter)
+         ELSE
+            STRINGPAIR name_ext := splitext(cur_file);
+            IF exts = "" ORF check_valid(last OF name_ext, exts)
+            THEN
+               (action(cur_file) | done)
+            FI
+         FI
+      FI
+   OD;
+
+   done:
+   SKIP
+);
+
+# Return a string array containing names of files with specified extensions starting at root. #
+PROC all_files_array = (STRING root, STRING exts, BOOL no_recurse, BOOL trim_root) []STRING:
+(
+   REF STRING_LIST files := STRING_LIST_INIT LOC STRING_LIST;
+   
+   PROC appender = (STRING name) BOOL:
+   (
+      (trim_root |
+            INT splitat := ELEMS root + 1;
+            (name[splitat] = "/" | splitat +:= 1);
+            files +:= name[splitat:] |
+               files +:= name);
+      FALSE
+   );
+
+   all_files(root, exts, appender, no_recurse, FALSE);
+   string_list_as_array(files)
+);
+
+# Simple filter by extension on get directory. Always return directory names. #
+PROC get_directory_filtered = (STRING root, STRING exts) []STRING:
+(
+   FLEX [1:0]STRING orgdir := get directory(root);
+   REF STRING_LIST files := STRING_LIST_INIT LOC STRING_LIST;
+
+   FOR i TO ELEMS orgdir
+   DO
+      BOOL ignore := orgdir[i] = "." OR orgdir[i] = "..";
+      BOOL is_directory := file is directory(root+"/"+orgdir[i]);
+      STRINGPAIR name_ext := splitext(orgdir[i]);
+      (((exts = "" ORF check_valid(last OF name_ext, exts)) AND NOT ignore) OR is_directory | files +:= orgdir[i])
+   OD;
+   
+   string_list_as_array(files)
+);
+
+
+# ----------- #
+# Array aids. #
+# ----------- #
+
+# File signature "UUIDs". Just output of date +%s when I want a "UUID"! #
+INT k_1d_array_sig = 1785383565;
+INT k_2d_array_sig = 1785383653;
+
+# Write a 1D REAL array to a file. Return FALSE on error. #
+PROC write_1d_real_array = (STRING filename, []REAL array) BOOL:
+(
+   BOOL retval := FALSE;
+
+   # Open a binary output file. #
+   FILE fout;
+   INT status := open_file(filename, "w+", fout);
+   (status /= 0 | done);
+
+   # Write a file type signature so we can try to verify it's a 1D array on read. #
+   put bin(fout, k_1d_array_sig);
+
+   # Write the size and the array contents as binary. #
+   INT size := ELEMS array;
+   put bin(fout, size);
+   put bin(fout, array);
+   close(fout);
+   retval := TRUE;
+
+   done:
+   retval
+);
+
+# Read a 1D REAL array from a file. If this fails, return a vacuum. #
+PROC read_1d_real_array = (STRING filename) []REAL:
+(
+   FLEX [1:0] REAL return;
+   
+   # Open a binary input file. On error, simply return an empty array (vacuum). #
+   FILE fin;
+   INT status := open_file(filename, "r+", fin);
+   (status /= 0 | done);
+
+   # Read and check the signature. #
+   INT sig;
+   get bin(fin, sig);
+   (sig /= k_1d_array_sig | close(fin); done);
+
+   # Read the size and the array contents as binary. #
+   INT size;
+   get bin(fin, size);
+   [size]REAL result;
+   get bin(fin, result);
+   return := result;
+   close(fin);
+
+   done:
+   return
+);
+
+# Return TRUE if a 1D array is a vacuum. #
+OP ARRAYEMPTY = ([]REAL array) BOOL:
+(
+   (ELEMS array) = 0
+);
+
+# Return index of minimum value in a 1D array. #
+OP ARRAYMININDEX = ([]REAL array) INT:
+(
+   INT mindex := 1;
+   REAL fmin := array[1];
+   FOR i FROM 2 TO ELEMS array
+   DO
+      (array[i] < fmin | fmin := array[i]; mindex := i)
+   OD;
+   mindex
+);
+
+# Return minimum value in a 1D array. #
+OP ARRAYMIN = ([]REAL array) REAL:
+(
+   REAL minval := 0.0;
+   INT mindex := ARRAYMININDEX array;
+   minval := array[mindex];
+   minval
+);
+
+# Return index of the maximum value in an array. #
+OP ARRAYMAXINDEX = ([]REAL array) INT:
+(
+   INT maxdex := 1;
+   REAL fmax := array[1];
+   FOR i FROM 2 TO ELEMS array
+   DO
+      (array[i] > fmax | fmax := array[i]; maxdex := i)
+   OD;
+   maxdex
+);
+
+# Return the maximum value in an array. #
+OP ARRAYMAX = ([]REAL array) REAL:
+(
+   REAL maxval := 0.0;
+   INT maxdex := ARRAYMAXINDEX array;
+   maxval := array[maxdex];
+   maxval
+);
+
+# Return the index of the element of array that is closest to a given value. #
+PRIO ARRAYCLOSESTINDEX = 1;
+OP ARRAYCLOSESTINDEX = ([]REAL array, REAL value) INT:
+(
+   REAL mindiff := ABS (array[1] - value);
+   INT mindex := 1;
+   FOR i FROM 2 TO ELEMS array
+   DO
+      REAL diff := ABS (array[i] - value);
+      (diff < mindiff | mindiff := diff; mindex := i)
+   OD;
+   mindex
+);
+
+# Write a 2D REAL array to a file. Return FALSE on error. #
+PROC write_2d_real_array = (STRING filename, [,]REAL array) BOOL:
+(
+   BOOL retval := FALSE;
+
+   # Open a binary output file. #
+   FILE fout;
+   INT status := open_file(filename, "w+", fout);
+   (status /= 0 | done);
+
+   # Write a file type signature so we can try to verify it's a 2D array on read. #
+   put bin(fout, k_2d_array_sig);
+
+   # Write the size and the array contents as binary. #
+   INT rows := 1 ELEMS array;
+   INT cols := 2 ELEMS array;
+   put bin(fout, (rows, cols));
+   put bin(fout, array);
+   close(fout);
+   retval := TRUE;
+
+   done:
+   retval
+);
+
+# Read a 2D REAL array from a file. If this fails, return a vacuum. #
+PROC read_2d_real_array = (STRING filename) [,]REAL:
+(
+   FLEX [1:0,1:0] REAL return;
+   
+   # Open a binary input file. On error, simply return an empty array (vacuum). #
+   FILE fin;
+   INT status := open_file(filename, "r+", fin);
+   (status /= 0 | done);
+
+   # Read and check the signature. #
+   INT sig;
+   get bin(fin, sig);
+   (sig /= k_2d_array_sig | close(fin); done);
+
+   # Read the dimensions (rows,cols) and the array contents as binary. #
+   INT rows, cols;
+   get bin(fin, (rows, cols));
+   [rows,cols]REAL result;
+   get bin(fin, result);
+   return := result;
+   close(fin);
+
+   done:
+   return
+);
+
+# Return TRUE if a 2D array is a vacuum. #
+OP ARRAYEMPTY = ([,]REAL array) BOOL:
+(
+   (1 ELEMS array * 2 ELEMS array ) = 0
+);
+
+
+# -------------------- #
+# Error handling aids. #
+# -------------------- #
+
+# Print error message for ierror (as per errno) to stand error. Prepend with leader. #
+PROC print_os_error = (STRING leader, INT ierror) VOID:
+(
+   put(stand error, (leader + ": " + strerror(ierror), new line))
+);
+
+# If status /= 0, an internal error must have occurred. Abort. #
+PROC ie = (INT status) VOID:
+(
+   (status /= 0 | put(stand error, ("Internal error detected. Giving up.", new line)); stop)
+);
+
+# If status FALSE, an internal error must have occurred. Abort. #
+PROC ieb = (BOOL status) VOID:
+(
+   (NOT status | put(stand error, ("Internal error detected. Giving up.", new line)); stop)
+);
+
+
+# ------ #
+# TESTS. #
+# ------ #
+
+IF FALSE
+THEN
+
+PROC stortst = (STRING s) VOID:
+(
+   REAL vt;
+   put(stand error, ("v ", s, ": ", string_to_real(s, vt, TRUE)));
+   put(stand error, (" result = ", vt, newline))
+);
+
+PROC stortst_f = (STRING s) VOID:
+(
+   REAL vt;
+   put(stand error, ("v ", s, ": ", string_to_real(s, vt, FALSE)));
+   put(stand error, (" result = ", vt, newline))
+);
+
+PROC sistrtst = (STRING s) REAL:
+(
+   STRING units;
+   REAL vt;
+   put(stand error, ("v ", s, ": ", si_string_to_real(s, vt, units)));
+   put(stand error, (" v = ", vt, " u = ", units, newline));
+   vt
+);
+
+PROC rtosistst = (REAL v) VOID:
+(
+   STRING s;
+   put(stand error, ("... v ", v, ": ", real_to_si_string(v, s, 8, 3, FALSE)));
+   put(stand error, (" s = ", s, newline));
+   put(stand error, ("... v ", v, ": ", real_to_si_string(v, s, 8, 3, TRUE)));
+   put(stand error, (" s = ", s, newline, newline))
+);
+
+PROC rtosistst2 = (REAL v) VOID:
+(
+   STRING s;
+   put(stand error, ("... v ", v, ": ", real_to_si_string(v, s, 8, 3, TRUE)));
+   put(stand error, (" s = ", s, newline))
+);
+
+PROC rtosistst3 = (REAL v) VOID:
+(
+   STRING s;
+   put(stand error, ("... v ", v, ": ", real_to_si_string(v, s, 8, 3, FALSE)));
+   put(stand error, (" s = ", s, newline))
+);
+
+PROC rtosistst4 = (REAL v) VOID:
+(
+   INT iv, dp, bdp;
+   BOOL ok;
+   STRING prefix;
+   ok := real_to_si_real_scaled(v, iv, 8, prefix, dp, FALSE);
+   STRING s := wint(iv) + " " + prefix;
+   bdp := 8 - dp;
+   put(stand error, ("... v ", v, ": ", ok));
+   put(stand error, (" s = ", s[1:bdp]+"."+s[bdp+1:], " dp = ", wint(dp), newline))
+);
+
+PROC sr_edges = VOID:
+(
+   STRING s := "2k";
+   STRING units := "unset";
+   REAL v := 0.0;
+   BOOL ok := si_string_to_real(s, v, units);
+   print(("1: ",ok," v=",v," units=",units,newline));
+
+   s := "1.5V";
+   ok := string_to_real(s, v, FALSE);
+   print(("2 :",ok," v=",v," 1.5 ",newline));
+
+   s := "1.5";
+   ok := string_to_real(s, v, FALSE);
+   print(("3 :",ok," v=",v," 1.5 ",newline));
+
+   s := "1.52";
+   ok := string_to_real(s, v, FALSE);
+   print(("4 :",ok," v=",v," 1.52 ",newline));
+
+   s := "1.52V";
+   ok := string_to_real(s, v, FALSE);
+   print(("5 :",ok," v=",v," 1.52 ",newline));
+
+   s := "1.52VZ";
+   ok := string_to_real(s, v, FALSE);
+   print(("6 :",ok," v=",v," 1.52 ",newline));
+
+   s := "1";
+   ok := string_to_real(s, v, FALSE);
+   print(("7 :",ok," v=",v," 1 ",newline));
+
+   s := "1V";
+   ok := string_to_real(s, v, FALSE);
+   print(("8 :",ok," v=",v," 1 ",newline))
+);
+
+PROC test_split_string = (STRING s, CHAR c) VOID:
+(
+   FLEX [1:0]STRING parts := split_string(s, c);
+   print(("[",s,"] --> parts: ", wint(ELEMS parts), " "));
+   FOR i TO ELEMS parts
+   DO
+      print(("[",parts[i],"]" + (i < ELEMS parts | "," | "" )))
+   OD;
+   print((newline))
+);
+
+PROC test_check_valid = (STRING test, STRING valids) VOID:
+(
+   print(("[",test,"] in [",valids,"] ? --> ",check_valid(test, valids),newline))
+);
+
+test_split_string("hello,you nice,things",",");
+test_split_string("",",");
+test_split_string("things,",",");
+test_split_string(",things,",",");
+test_split_string("thing",",");
+test_split_string(",,,",",");
+test_split_string(",a   ,   b,",",");
+print(("[",trim_trailing("  a b  "),"]", new line));
+print(("[",trim_leading("  a b  "),"]", new line));
+print(("[",trim("  a b  "),"]", new line));
+print(("[",trim(" "),"]", new line));
+print(("[",trim(""),"]", new line));
+test_split_string("hello you nice things", " ");
+test_split_string(""," ");
+test_split_string("things "," ");
+test_split_string(" things "," ");
+test_split_string("thing"," ");
+test_split_string("   "," ");
+
+STRING valid_baud = "50,75,110,134,150,200,300,600,1200,1800,2400,4800,9600,19200,38400,57600,\
+115200,230400,460800,500000,576000,921600,1000000,1152000,1500000,2000000";
+test_check_valid("5", valid_baud);
+test_check_valid("50", valid_baud);
+test_check_valid("6000", valid_baud);
+test_check_valid("600", valid_baud);
+test_check_valid("nuts", valid_baud);
+test_check_valid("", valid_baud);
+test_check_valid(" ", valid_baud);
+test_check_valid(",", valid_baud);
+test_check_valid("2000000", valid_baud);
+
+REAL vt := 0;
+stortst("1");
+stortst("10");
+stortst("1.23");
+stortst("-1.23");
+stortst("+1.23");
+stortst(".23");
+stortst("-.23");
+stortst("0.23");
+stortst("-0.23");
+stortst("+0.23");
+stortst("1.23e4");
+stortst("1.23e-4");
+stortst("-1.23e-4");
+stortst(".");
+stortst("1.3e");
+stortst("1.gargle");
+stortst_f("1.gargle");
+stortst("e2");
+stortst("+");
+stortst("-");
+stortst("-E");
+stortst("-1E3");
+stortst("-1E30");
+stortst("-1E300");
+stortst("-1E3000");
+
+sr_edges;
+
+print(("Open file mode r test. file exists.", new line));
+FILE fin;
+INT fstatus := open_file("test.ini", "r", fin);
+IF fstatus /= 0
+THEN
+   print_os_error("open test.ini", fstatus)
+ELSE
+   close(fin)
+FI;
+
+print(("Open file mode r test. file does not exist.", new line));
+fstatus := open_file("new.txt", "r", fin);
+IF fstatus /= 0
+THEN
+   print_os_error("open new.txt", fstatus)
+ELSE
+   close(fin)
+FI;
+
+print(("Open file mode w test.", new line));
+FILE fout;
+fstatus := open_file("new.txt", "w", fout);
+IF fstatus /= 0
+THEN
+   print_os_error("create new.txt", fstatus)
+ELSE
+   put(fout, ("This is new.", new line));
+   close(fout)
+FI;
+
+print(("Open file bad mode test.", new line));
+fstatus := open_file("new.txt", "x", fout);
+IF fstatus /= 0
+THEN
+   print_os_error("bad mode test", fstatus)
+ELSE
+   close(fout)
+FI;
+
+vt := sistrtst("1.23 kHz"); rtosistst(vt);
+vt := sistrtst("1.23kHz"); rtosistst(vt);
+vt := sistrtst("32 uA"); rtosistst(vt);
+vt := sistrtst("987 EB"); rtosistst(vt);
+vt := sistrtst("9.87 EB"); rtosistst(vt);
+vt := sistrtst("90.8 MHz"); rtosistst(vt);
+vt := sistrtst("1.23"); rtosistst(vt);
+vt := sistrtst("6.78daL"); rtosistst(vt);
+vt := sistrtst("1.7ha"); rtosistst(vt);
+vt := sistrtst("6.3cm"); rtosistst(vt);
+vt := sistrtst("0cm"); rtosistst(vt);
+vt := sistrtst("0THz"); rtosistst(vt);
+vt := sistrtst("-30YHz"); rtosistst(vt);
+vt := sistrtst("-27ym"); rtosistst(vt);
+
+first random(13579);
+
+REAL test_val := 1E15;
+FOR i TO 30
+DO
+   rtosistst2(test_val);
+   test_val /:= 10
+OD;
+
+put(stand error, (newline));
+
+test_val := 1E15;
+FOR i TO 30
+DO
+   rtosistst2(next random * test_val);
+   test_val /:= 10
+OD;
+
+put(stand error, (newline));
+
+test_val := -1E15;
+FOR i TO 30
+DO
+   rtosistst3(test_val);
+   test_val /:= 10
+OD;
+
+put(stand error, (newline));
+
+test_val := -1E15;
+FOR i TO 30
+DO
+   rtosistst3(next random * test_val);
+   test_val /:= 10
+OD;
+
+put(stand error, (newline));
+
+test_val := 1E15;
+FOR i TO 30
+DO
+   rtosistst4(test_val);
+   test_val /:= 10
+OD;
+
+put(stand error, (newline));
+
+test_val := 1E15;
+FOR i TO 30
+DO
+   rtosistst4(next random * test_val);
+   test_val /:= 10
+OD;
+
+STRING path := "/a/full/path/thing.ext"; print((path," ---> "));
+STRINGPAIR pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "partial/path/thing.ext"; print((path," ---> "));
+pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "partial/path/thing"; print((path," ---> "));
+pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "thing.ext"; print((path," ---> "));
+pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "partial/path/"; print((path," ---> "));
+pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "/"; print((path," ---> "));
+pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := ""; print((path," ---> "));
+pair := splitpath(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+
+path := "partial/path/thing.ext"; print((path," ---> "));
+pair := splitext(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "thing.ext"; print((path," ---> "));
+pair := splitext(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "thing."; print((path," ---> "));
+pair := splitext(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := ".ext"; print((path," ---> "));
+pair := splitext(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := ""; print((path," ---> "));
+pair := splitext(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line));
+
+path := "/foo/....jpg"; print((path," ---> "));
+pair := splitext(path); print_string_pair(pair); print((path," ---> "));
+print((joinpair(pair), new line));
+print(("----", new line))
+
+
+FI;

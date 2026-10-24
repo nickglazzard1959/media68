@@ -1,0 +1,584 @@
+COMMENT
+Static web site generator for music, video and book libraries
+=============================================================
+
+This program takes a tree of files and creates a set of HTML files that
+contain links to navigate in the same way as a file tree can be navigated.
+
+It is a sort of specialised static web site generator.
+It has so far only been tested with the NGINX server on Debian Linux.
+
+Top level directories in the tree get links in an index.html.
+Each sub-directory gets its own HTML file with links to either:
+ - other (lower level) sub-directories 
+ - terminal HTML files.
+
+The terminal HTML file contains what is needed to present the contents
+of the terminal (non-directory) file.
+
+The terminal files may be large and the file tree may be on a remote
+machine, mounted by SMB or NFS. This poses a problem for web servers,
+which, by default, only serve files from their own HTML tree
+(e.g. /var/www/html/...). For example, an SMB share on another machine
+on the LAN may be mounted at /mnt/videolib. This is the file tree to
+be converted to HTML links, but the terminal files must be referenced
+with a root explicity declared to the web server as an alias. As an example, this
+addition to an NGINX configuration file makes /mnt/videolib/... capable of
+being referenced as /external-files/...
+
+/etc/nginx/sites-available/default
+----------------------------------
+	root /var/www/html;
+
+	location /external-files/ {
+		 alias /mnt/videolib/;
+	}
+
+To accomodate this security dance, the terminal file name must have its
+true root (here /mnt/videolib) replaced by /external-files (one of the
+tasks this program performs).
+
+This was originally developed to create a version of a local video
+library than can be accessed from any modern browser on the LAN. The
+default terminal file contents reflect this application.
+
+Processing for a local audio/music library was quickly added, once
+accessing the video library was found to work.
+
+Processing for e-books has also ben added.
+
+It is possible to specify any program or shell script file to be
+run to generate the contents of a terminal HTML file, though, so
+this is a somewhat general purpose application. That program is
+passed the terminal HTML file name and the tree file name (with modified root)
+and should generate the required HTML contents to display (etc.) the
+tree file.
+
+Examples
+--------
+
+To generate HTML pages for a video library (minimal example):
+a68g files_to_html.a68 -- -o tx -v
+
+This builds the web pages for a video collection in a directory called tx using all defaults
+apart from some verbose output to monitor progress.
+
+Another version of this:
+a68g files_to_html.a68 -- -o tx -v -p video -r /mnt/videolib -f external-files 
+   -i vindex.html -t "Film and TV Collection"
+
+To generate HTML pages for an audio library:
+a68g files_to_html.a68 -- -r /mnt/audiolib/ -o audexp2 -p audio -v -e '.flac,.mp3' --multi
+   -f external-files2 -i aindex.html -a -t "Music Collection"
+
+This builds the web pages for an audio collection in a directory called audexp2. The terminal
+file processing is set to the internal audio path. The file extensions to consider are .flac
+and .mp3 in a file tree with a root at /mnt/audiolib. The terminal audio files are to have links in
+the final directory level rather than individual terminal HTML files being created for each
+terminal file. This is useful for audio files, where many players can sensibly be stacked on a
+single page. For video files, it is best if each video file has its own HTML file as the
+players are large. The desired top level index file name is specified (so it doesn't overwrite
+the default index.html). Alphabetic sub-indexes are requested. The index file then contains
+only A, B, C ... as links to sub-index files which contain links to the top directory level
+in the file hierarchy. This is useful for audio, where these top level directories are
+usually "artist names" (in the structure used with mpd, for example). As there may be
+many artists in a collection, this keeps the top level index (and sub-indices) manageably short.
+The external files alias used by the web server for the audio files is to be external-files2.
+
+To generate HTML pages for a book library:
+a68g files_to_html.a68 -- -r /mnt/booklib/ -o bookexp -p book -v -e '.pdf' --multi
+   -f external-files3 -i bindex.html -t "Book Collection"
+
+This is very similar to the audio library case. The "book" built-in processing just creates
+links to the PDF files, though -- no 'player' is needed. It is assumed the browser can find
+a suitable way of displaying PDF files itself.
+
+Scripts
+-------
+
+mountaudio.sh - Example of mounting an audio library from an SMB share.
+mountvideo.sh - Example of mounting a video library from an SMB share.
+mountbooks.sh - Example of mounting a book library from an SMB share.
+map-video-files.sh - Example of how to organise (mostly) flat files using symbolic links for files_to_html.a68.
+fix-720-aspect.sh - Make 576x720 16:9 video appear with the correct aspect ratio in an HTML 5 video player.
+
+Usage notes
+-----------
+
+Once a directory full of HTML files has been created by this program, simply copy the entire
+contents to the web server HTML tree, For example:
+
+cd bookexp
+sudo cp * /var/www/html/
+
+The 'external-files...' referenced with '-f' options must be set up as aliases in the webserver
+configuration file, as explained above.  After modifying the configuration files, the webserver
+must be restarted. For example:
+
+sudo systemctl restart nginx
+
+If 'external-files' refers to an SMB share mounted on the webserver machine, the SMB server
+machine must (obviously) be configured with that share. Some examples:
+
+[videolib]
+  comment = Movie and video library.
+  path = /massbackup/contents/videolib
+  available = yes
+  read only = no
+  browsable = yes
+  public = yes
+  writeable = yes
+  follow symlinks = yes
+  wide links = yes
+
+[booklib]
+  comment = Book library.
+  path = /massbackup/contents/newbooks
+  available = yes
+  read only = no
+  browsable = yes
+  public = yes
+  writeable = yes
+  follow symlinks = yes
+  wide links = yes
+
+Note that for writeable access to actually work, the entire path must have write permissions
+(on every part of the path). Note also that giving the user used to 'login' to the SMB server
+an SMB specific password (rather than use their system password) is a good idea. Use 'smbpasswd'
+to to this (set it to something trivial like 12345678). This password can reasonably be used
+in mount scripts.
+
+Nick Glazzard 2026
+------------------
+COMMENT
+
+PR heap=256M PR # Probably not needed, actually. #
+
+PR read "utility.a68" PR
+PR read "dictionaries.a68" PR
+PR read "arg_parser.a68" PR
+
+# Generate HTML files which use links to mimic the arrangement of a tree of files. #
+# The root of the file tree to convert to links is file_tree_root. This becomes an index file. #
+# The exts argument is a comma separated link of terminal file extensions to notice. ".mp4,.mkv" etc. #
+# The output directory for HTML files (created if it doesn't exist, emptied if it does) is uhtml_output. #
+# trm_pgm is the name of a script file (etc.) to call to produce the terminal file contents. #
+# If it is an empty string, video or audio, use an appropriate built-in production process. #
+# index is the name of an index file to put top level links in. #
+# files is the name of an external files alias for NGINX. #
+# title will be added to the index page if it isn't empty. #
+# If multi, put multiple terminal files in the last directory mimic HTML file. #
+# Otherwise, put a single terminal file link in a mimic HTML file for that terminal file. #
+# If verbose, issue some progress information. #
+# Return: 0: OK; 1, 2: Failed to empty output dir;  3-8: Append to files failed. #
+# 9: Expected file did not exist (logic error). #
+PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_pgm, index, files, title,
+                                BOOL multi, alpha_tabs, verbose) INT:
+(
+   INT retval := 0;
+   INT ec := 0;      # Error count. #
+   CHAR k_ds = "@";  # Directory separator for mimic file names. Was +. @ has fewer conflicts. #
+   INT html_file_count := 0;
+   STRING html_output := uhtml_output;
+
+   # Empty the HTML file output directory. #
+   (NOT run_command("rm -rf " + uhtml_output) | retval := 1; ec +:= 1; done);
+   (NOT run_command("mkdir " + uhtml_output) | retval := 2; ec +:= 1; done);
+
+   # Generate an HTML page header. #
+   PROC make_html_header = (STRING title) []STRING:
+   (
+      REF STRING_LIST lines := STRING_LIST_INIT LOC STRING_LIST;
+      lines +:= "<!DOCTYPE html>";
+      lines +:= "<html lang=""en"">";
+      lines +:= "<head>";
+      lines +:= "<meta charset=""UTF-8"">";
+      lines +:= "<meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">";
+      lines +:= "<title>" + title + "</title>";
+      lines +:= "</head>";
+      lines +:= "<body>";
+      string_list_as_array(lines)
+   );
+
+   # Create files that mimic a directory tree, containing hypertext links that  #
+   # allow that tree to be navigated. The s string is a file name in the directory tree. #
+   PROC make_html_files = (STRING s) BOOL:
+   (
+      # Look at the file name after the tree root. #
+      STRING after := s[(ELEMS root)+1:];
+      IF after /= ""
+      THEN
+         # Convert / in the name to +. The output files are to be in a single directory. #
+         STRING after_name := replace_char(after, "/", k_ds, TRUE);
+         STRING after_output := html_output+"/"+after_name+".html"; # Output file name. #
+
+         # If the tree file is a directory and its mimic file doesn't exist yet, create the mimic. #
+         IF file is directory(s)
+         THEN
+            IF NOT file is regular(after_output)
+            THEN
+               (verbose | print(("DIR: ", after_output, new line)));
+
+               # Create an HTML file to put links to sub-directories in. #
+               (append_lines(make_html_header(replace_char(after_name,k_ds," ",TRUE)), after_output) /= 0 |
+                     ec +:= 1; retval := 3); # HTML leader. #
+               (append_lines(("<h1>"+replace_char(after_name,k_ds," ",TRUE)+"</h1>"), after_output) /= 0 |
+                     ec +:= 1; retval := 4); # Title. #
+               html_file_count +:= 1;
+
+               # Find items needed to construct a link. #
+               STRING href_string := "/" + after_name + ".html";
+               STRINGPAIR stem_term := splitlast(after_name, k_ds);
+               STRING presented_name := last OF stem_term;
+
+               # If the mimic file for the parent directory exists, put a link to this directory #
+               # mimic file in it. #
+               STRINGPAIR parent := splitlast(after_output, k_ds);
+               IF file is regular(first OF parent + ".html")
+               THEN
+                  STRING link := "<a href=""" + href_string + """>" + presented_name + "</a><br>";
+                  (append_lines((link), first OF parent + ".html") /= 0 | ec +:= 1; retval := 5)
+
+               # If the directory is at the top level, a mimic file will not exist. Otherwise, it must. #
+               ELSE
+                  IF count_char_occurrences(k_ds, after_output) > 1
+                  THEN
+                     put(stand error, 
+                         ("make_html_files(): ERROR: Parent directory mimic file does not exist for ",s,new line));
+                     ec +:= 1; retval := 9
+                            
+                  # At the top level, a link needs to be added to an index.html file. #
+                  ELSE
+                     STRING link := "<a href=""" + href_string + """>" + 
+                                    replace_string(first OF stem_term, k_ds, "", TRUE) + "</a><br>";
+
+                     # If creating sub-index files for each unique top level file name first character ... #
+                     IF alpha_tabs
+                     THEN
+                        STRING leading_alpha := (first OF stem_term)[2];
+                        STRING alpha_index_name := "/" + leading_alpha + "_" + index;
+                        STRING alpha_index_file := html_output + alpha_index_name;
+                        STRING alpha_link := "<a href=""" + alpha_index_name + """>" + leading_alpha + "</a><br>";
+
+                        # If the sub-index for this first character doesn't exist, create it. #
+                        # Put a link to the new sub-index file in the top level index file. #
+                        IF NOT file is regular(alpha_index_file)
+                        THEN
+                           (append_lines((make_html_header(leading_alpha + " Sub-index")), alpha_index_file) /= 0 | 
+                                 ec +:= 1; retval := 4);
+                           (append_lines((alpha_link), html_output + "/"+index) /= 0 | ec +:= 1; retval := 5)
+                        FI;
+
+                        # Always put a link to the top level file in the sub-index. #
+                        (append_lines((link), alpha_index_file) /= 0 | ec +:= 1; retval := 5)
+
+                     # Not using first character sub-index files. #
+                     ELSE
+                        (append_lines((link), html_output + "/"+index) /= 0 | ec +:= 1; retval := 5)
+                     FI
+                  FI
+               FI
+            FI
+
+         # Tree file is not a directory, but a terminal file. #
+         ELSE
+            STRINGPAIR parent := splitlast(after_output, k_ds);
+            STRING parent_name := first OF parent + ".html";
+
+            # Verify the HTML mimic file for the directory exists at this point. #
+            IF file is regular(parent_name)
+            THEN
+               STRINGPAIR name_ext := splitext(after_name);
+               STRING new_terminal := replace_string(after_name, last OF name_ext, "", TRUE);
+               STRINGPAIR stem_term := splitlast(new_terminal, k_ds);
+               STRING presented_name := last OF stem_term;
+               STRING external_files_s := replace_string(s, file_tree_root, files, FALSE);
+               STRING new_terminal_output := "";
+
+               # Put links to actual terminal files in the last directory file if multi. #
+               IF multi
+               THEN
+                  STRING link := "<a href=""" + external_files_s + """>" + presented_name + "</a><br>";
+                  (append_lines((link), parent_name) /= 0 | ec +:= 1; retval := 6);
+                  new_terminal_output := parent_name;
+                  (verbose | print(("LNK: ", link[:min2int(ELEMS link,50)], "...", new line)))
+
+               # Otherwise, make an HTML file and put a link to the terminal file in it. #
+               # Put a link to the newly made file in the parent directory mimic file.#
+               ELSE
+                  # Link to new file in parent directory mimic. #
+                  STRING href_string := "/" + new_terminal + ".html";
+                  STRING link := "<a href=""" + href_string + """>" + presented_name + "</a><br>";
+                  (append_lines((link), parent_name) /= 0 | ec +:= 1; retval := 6);
+
+                  # Make new terminal file mimic. Link to terminal tree file in terminal mimic. #
+                  new_terminal_output := html_output + "/" + new_terminal + ".html";
+                  html_file_count +:= 1;
+                  (verbose | print(("TRM: ", new_terminal_output, new line)))
+               FI; # Multiple terminal file links in parent file or not.  #
+
+               # Video file processing if no trm_pgm is supplied, or it is the keyword "video". #
+               IF trm_pgm = "" OR trm_pgm = "video"
+               THEN
+                  STRING videofile_ext := last OF splitext(s);
+                  (NOT multi |
+                        (append_lines(
+                              make_html_header(replace_string(replace_char(after_name,k_ds," ",TRUE),videofile_ext," ",TRUE)), 
+                              new_terminal_output) /= 0 | ec +:= 1; retval := 7)
+                  );
+                  STRING videotype := videofile_ext[2:];
+                  (append_lines(("<video width=""640"" height=""360"" controls>",
+                                 "  <source src="""+external_files_s+""" type=""video/"+videotype+""">",
+                                 "  Your browser does not support the video tag",
+                                 "</video>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8);
+                  (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8)
+
+               # Audio file processing. #
+               ELIF trm_pgm = "audio"
+               THEN
+                  STRING audiofile_ext := last OF splitext(s);
+                  (NOT multi |
+                        (append_lines(
+                              make_html_header(replace_string(replace_char(after_name,k_ds," ",TRUE),audiofile_ext," ",TRUE)), 
+                              new_terminal_output) /= 0 | ec +:= 1; retval := 7)
+                  );
+                  STRING audiotype := audiofile_ext[2:];
+                  (append_lines(("<audio controls>",
+                                 "  <source src="""+external_files_s+""" type=""audio/"+audiotype+""">",
+                                 "  Your browser does not support the audio tag",
+                                 "</audio>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8);
+                  (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8)
+
+               # Book file processing. #
+               ELIF trm_pgm = "book"
+               THEN
+                  STRING bookfile_ext := last OF splitext(s);
+                  (NOT multi |
+                        (append_lines(
+                              make_html_header(replace_string(replace_char(after_name,k_ds," ",TRUE),bookfile_ext," ",TRUE)), 
+                              new_terminal_output) /= 0 | ec +:= 1; retval := 7);
+                        STRING link := "<a href=""" + external_files_s + """>" + presented_name + "</a><br>";
+                        (append_lines((link), new_terminal_output) /= 0 | ec +:= 1; retval := 6);
+                        (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8);
+                  )
+
+               # Or run a specified program. #
+               ELSE
+                  STRING pgm_cmd := trm_pgm + " '" + new_terminal_output + "' '" + external_files_s + "'";
+                  CO print(("*** ", pgm_cmd, new line)); CO
+                  (NOT run_command(pgm_cmd) | 
+                        put(stand error, ("make_html_files(): ERROR: Cannot run specified terminal program.",
+                                          new line)))
+               FI # Program to generate terminal file contents. #
+
+            ELSE
+               put(stand error, 
+                   ("make_html_files(): ERROR: Expected parent file not found for terminal file: ",
+                    first OF parent,new line));
+               ec +:= 1; retval := 9
+            FI # Parent mimic file exists. #
+         FI # Not directory. #
+      FI; # File name - root name not empty. #
+      FALSE # Keep going. #
+   );
+
+   # Try to sort audio file names correctly even though some file names have track numbers #
+   # without leading zeros. E.g. 1 instead of 01, etc. Sorting these in the default #
+   # way gives tracks 1, then 10, then 2 ... so album tracks are out of order.  #
+   PROC audio_sort = ([]STRING names) []STRING:
+   (
+      INT n := ELEMS names;
+      [n]STRING modified_names;
+      [n]STRING sorted_names;
+      FOR i TO n
+      DO 
+         # Split the file name into space separated words. #
+         FLEX [1:0]STRING words := split_string(names[i], " ");
+         FOR j TO ELEMS words
+         DO
+            # A word comprising decimal digits should be converted to nnn with leading zeros. #
+            (all_digits(words[j]) | 
+                  STRING mod_int;
+                  INT value := string_to_int(words[j]);
+                  putsf(mod_int, ($3d$, clamp_int(value,0,999)));
+                  words[j] := mod_int
+            )
+         OD;
+         # Assemble the possibly modified words to a string again. #
+         modified_names[i] := join_string(words, " ")
+         CO print((modified_names[i], new line)) CO
+      OD;
+      # Sort the modified names with an index sort. #
+      FLEX [1:0]INT indices := isort_strings(modified_names);
+      # Return the original file names sorted according to the modified names. #
+      FOR i TO n DO sorted_names[i] := names[indices[i]] OD;
+      sorted_names
+   );
+
+   # Add trailer text to HTML files. This is a callback for all_files(). #
+   PROC finish_html_files = (STRING s) BOOL:
+   (
+      # Treat audio processing with multi specially by generating a player #
+      # with Javascript to play all files in a terminal directory. #
+      IF trm_pgm = "audio" AND multi
+      THEN
+         audio_multi_play_all(s)
+      FI;
+
+      # End the HTML page. #
+      (append_lines(("<br><hr><a href=""/" + index + """>Top</a><br>",
+                     "Last updated: " + date_time_string(FALSE) +"<br><hr>",
+                     "</body>",
+                     "</html>"), s) /= 0 | ec +:= 1; retval := 9);
+      FALSE # Continue processing files. #
+   );
+
+   # Output Javascript and other elements to "play all" files in a terminal HTML directory mimic. #
+   # This is only relevant to audio processing with the multi option. #
+   PROC audio_multi_play_all = (STRING s) VOID:
+   (
+      # Read the HTML file as it currently is. Look for audio files in it. #
+      REF STRING_LIST src_files := STRING_LIST_INIT LOC STRING_LIST;
+      FILE fin;
+      (open_file(s, "r+", fin) /= 0 |
+            put(stand error, ("audio_multi_play_all(): Failed to open HTML file: ", s, new line));
+            stop
+      );
+
+      BOOL eof := FALSE;
+      PROC at_eof = (REF FILE afin) BOOL: ( eof := TRUE );
+      STRING input_line;
+      on file end(fin, at_eof);
+
+      DO
+         get(fin, (input_line, new line)); (eof | file_end);
+         INT start, end;
+         IF grep in string("src=", input_line, start, end) = 0
+         THEN
+            IF grep in string("external-files2.*\.flac", input_line, start, end) = 0
+            THEN
+               src_files +:= input_line[start:end]
+            ELIF grep in string("external-files2.*\.mp3", input_line, start, end) = 0
+            THEN
+               src_files +:= input_line[start:end]
+            FI
+         FI
+      OD;
+
+      file_end:
+      close(fin);
+
+      # If we found more than one audio file, create another audio player for the whole lot. #
+      IF ELEMS src_files > 1
+      THEN
+         []STRING player_all = \
+          ("<h2>Play All</h2>",
+           "<p>Current track: <span id=""track-counter""></span></p>",
+           "<audio id =""audio-player"" controls>",
+              "Your browser does not support the audio element.",
+           "</audio>");
+         (append_lines(player_all, s) /= 0 | ec +:= 1; retval := 6);
+
+         # Write Javascript to make the "all tracks" player work. #
+         REF STRING_LIST java_script := STRING_LIST_INIT LOC STRING_LIST;
+         FLEX [1:0]STRING src_files_array := string_list_as_array(src_files);
+         INT n := ELEMS src_files_array;
+         java_script +:= "<script>";
+         java_script +:= "   const playlist = [";
+         FOR i TO n
+         DO
+            java_script +:= "      """+src_files_array[i]+""""+(i < n | "," | "")
+         OD;
+         java_script +:= "   ];";
+
+         java_script +:= "   let currentTrackIndex = 0;";
+         java_script +:= "   document.getElementById(""track-counter"").textContent = currentTrackIndex + 1;";
+         java_script +:= "   const player = document.getElementById('audio-player');";
+         java_script +:= "   player.src = playlist[currentTrackIndex];";
+         java_script +:= "   player.addEventListener('ended', function() {";
+         java_script +:= "      currentTrackIndex++;";
+         java_script +:= "      if (currentTrackIndex < playlist.length) {";
+         java_script +:= "          document.getElementById(""track-counter"").textContent = currentTrackIndex + 1;";
+         java_script +:= "          player.src = playlist[currentTrackIndex];";
+         java_script +:= "          player.play();";
+         java_script +:=  "      } else {";
+         java_script +:= "          console.log(""Playlist finished."");";
+         java_script +:=  "      }";
+         java_script +:=  "   });";
+         java_script +:= "</script>";
+         (append_lines(string_list_as_array(java_script), s) /= 0 | ec +:= 1; retval := 6)
+      FI # More than one audio source file in a terminal directory mimic. #
+   );
+
+   # Start an index.html file. #
+   STRING index_name := html_output + "/" + index;
+   STRING final_title := (title = "" | "Index" | title + " Index");
+   (append_lines((make_html_header(final_title)), index_name) /= 0 | ec +:= 1; retval := 4; done);
+   (append_lines(("<h1>"+final_title+"</h1>"), index_name) /= 0 | ec +:= 1; retval := 4);
+
+   # Process the input tree, making HTML files.  #
+   (verbose | print(("Processing the input tree ...", new line)));
+   STRING_SORT_PROC sorter := (trm_pgm = "audio" | audio_sort | default_string_sort);
+   all_files_ex(root, exts, make_html_files, FALSE, TRUE, sorter);
+
+   # Process the output directory, completing the HTML files. #
+   (verbose | print(("Completing output HTML files ...", new line)));
+   all_files(html_output, ".html", finish_html_files, FALSE, TRUE);
+
+   # Final statistics if desired. #
+   done:
+   (verbose | print(("Generated ", wint(html_file_count), 
+                     " HTML files. Return code = ", wint(retval), 
+                     " Error count = ", wint(ec), new line)));
+
+   retval
+);
+
+
+# ------------ #
+# MAIN PROGRAM #
+# ------------ #
+
+REF ARG_PARSE arg_parser := make_arg_parser("Convert a tree of files to HTML files and links");
+arg_set_description(arg_parser,
+"This program takes a tree of files and creates a set of HTML files that\n\
+contain links to navigate in the same way as the file tree can be navigated.\n\
+The final links are to terminal HTML files that display or process the\n\
+non-directory files in the original file tree.\n\
+This was written to allow a local video library to be navigated and the\n\
+videos in it played in a modern browser using HTML 5 capabilities.\n\
+It can process local audio libraries too.\n\
+It may have other applications, though.");
+REF STRING root := arg_add_string_option(arg_parser, "-r", "--root", 
+                                         "File tree root directory.", "/mnt/videolib");
+REF STRING exts := arg_add_string_option(arg_parser, "-e", "--exts", 
+                                         "File extensions to notice.", ".mp4");
+REF STRING outdir := arg_add_string_option(arg_parser, "-o", "--outdir",
+                                           "Output directory for HTML files (EMPTIED!)", "./tree-output");
+REF STRING trm_pgm := arg_add_string_option(arg_parser, "-p", "--program", 
+                                            "Program to generate terminal HTML file contents", "");
+REF STRING index := arg_add_string_option(arg_parser, "-i", "--index", 
+                                          "Name of index file to generate", "index.html");
+REF STRING files := arg_add_string_option(arg_parser, "-f", "--files", 
+                                          "External files alias (see NGINX docs)", "external-files");
+REF STRING title := arg_add_string_option(arg_parser, "-t", "--title", 
+                                          "Title for index page.", "");
+REF BOOL multi := arg_add_flag(arg_parser, "-m", "--multi", 
+                               "Put terminal file links for a directory in a single file.", FALSE);
+REF BOOL alpha := arg_add_flag(arg_parser, "-a", "--alpha", 
+                               "Create alphabetic sub-indices.", FALSE);
+REF BOOL verbose := arg_add_flag(arg_parser, "-v", "--verbose", 
+                                 "Output informational messages.", FALSE);
+( NOT parse_args(arg_parser) | 
+      put(stand error, ("Unknown or malformed command line arguments.", newline)); stop );
+
+print(("Status = ", wint(file_tree_to_html_links(root,     # file tree root #
+                                                 exts,     # file extensions to notice #
+                                                 outdir,   # output directory fot HTML files #
+                                                 trm_pgm,  # program to run to generate terminal files #
+                                                 index,    # index (top level) HTML file to generate #
+                                                 files,    # external files alias to use #
+                                                 title,    # index page title #
+                                                 multi,    # put links to files in dir HTML not single terminal files #
+                                                 alpha,    # create alphabetic sub-indices #
+                                                 verbose)), new line))

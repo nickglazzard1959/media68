@@ -1,0 +1,263 @@
+COMMENT
+Select a media file in a file system and play it with mpv
+=========================================================
+
+This is a very simple program which presents lists of files
+with certain extensions found in a directory tree and allows
+that tree to be navigated. Selections are made just by typing numbers.
+A specified program is then run on the selected file.
+
+It is mainly intended to be used with mpv to play audio and video
+files. One feature useful for this is that it can play all the
+qualifying files found in a directory. It also sorts those files
+in a way that gets them in the right order for tracks in an album
+(if the filenames have been prepared for use with things like mpd).
+
+In addition to mpv for audio and video, it can be used to display
+e-books.
+
+Scripts that use this program for specific purposes are:
+audio68.sh - Browse and play items from an audio assets library.
+video68.sh - Browse and play items from a video assets library.
+books68.sh - Browse and read books in a books library.
+
+These all start this program in a new detached terminal window with
+arguments suitable for their specific purpose. These use environment
+variables set in select_vars.sh. The contents of this should be edited
+as needed and it should be sourced before the script files are used.
+
+Installation:
+For this program to play media files, the script mpv-run.sh
+must be copied to somewhere on your PATH (e.g. /usr/local/bin) and
+input.conf must be copied to ~/.config/mpv/input.conf. This is needed
+to distinguish between mpv exiting because the user asked it to with q
+and it exiting for other reasons.
+
+The script files mentioned above should also be copied to somewhere on
+the PATH and the select_vars.sh file sourced (not executed) before trying
+to use the script files.
+
+Nick Glazzard, 2026
+-------------------
+COMMENT
+
+PR read "utility.a68" PR
+PR read "dictionaries.a68" PR
+PR read "arg_parser.a68" PR
+
+# Get a sorted list of file names in a directory. #
+# Unfortunately, we may need to sort the names based on a modified version of those names. #
+PROC sorted_filenames_in_directory = (STRING dir, STRING exts) []STRING:
+(
+   # Try to sort correctly even though some file names have track numbers #
+   # without leading zeros. E.g. 1 instead of 01, etc. Sorting these in the default #
+   # way gives tracks 1, then 10, then 2 ... so album tracks are out of order.  #
+   FLEX [1:0]STRING names := get_directory_filtered(dir, exts);
+   INT n := ELEMS names;
+   [n]STRING modified_names;
+   [n]STRING sorted_names;
+   FOR i TO n
+   DO 
+      # Split the file name into space separated words. #
+      FLEX [1:0]STRING words := split_string(names[i], " ");
+      FOR j TO ELEMS words
+      DO
+         # A word comprising decimal digits should be converted to nnn with leading zeros. #
+         (all_digits(words[j]) | 
+               STRING mod_int;
+               INT value := string_to_int(words[j]);
+               putsf(mod_int, ($3d$, clamp_int(value,0,999)));
+               words[j] := mod_int
+         )
+      OD;
+      # Assemble the possibly modified words to a string again. #
+      modified_names[i] := join_string(words, " ")
+      CO print((modified_names[i], new line)) CO
+   OD;
+   # Sort the modified names with an index sort. #
+   FLEX [1:0]INT indices := isort_strings(modified_names);
+   # Return the original file names sorted according to the modified names. #
+   FOR i TO n DO sorted_names[i] := names[indices[i]] OD;
+   sorted_names
+);
+
+# Present filenames in a directory. Allow one to be chosen by a numerical index. #
+# If what is chosen is a directory, recursively descend into it. #
+# Accept some single character commands in addition to selection indices, #
+# p: process all qualifying files in the current directory. #
+# p<n>: as p, but start at file index n. #
+# u: go up to the previous level (directory). #
+# q: exit immediately. #
+# h: display command help. #
+# At the initial directory, first present a 'pseudo-directory' formed from the #
+# first characters of actual filenames (asalphas TRUE). This gives a sort of 'tab index'. #
+# This procedure also makes use of the following 'global' strings: accept_exts, do_what, abort_flag_file #
+PROC present_list = (STRING dir, STRING start, BOOL asalphas, INT level) VOID:
+(
+   # Loop potentially forever. #
+   WHILE TRUE
+   DO
+      # Show where we are in the hierarchy. #
+      clear_ansi_screen;
+      print_underlined("Level: " + wint(level) + " : " + dir + (asalphas | " (Alphabetic index)" | ""));
+
+      # Get a list of files and directories in this directory. #
+      FLEX [1:0]STRING filenames := sorted_filenames_in_directory(dir, accept_exts);
+      REF STRING_LIST alphabetics := STRING_LIST_INIT LOC STRING_LIST;
+      REF STRING_LIST filtered := STRING_LIST_INIT LOC STRING_LIST;
+
+      # Iterate over files. Get array of those that start with start string. #
+      # Build list of unique starting characters. #
+      FOR i TO ELEMS filenames
+      DO
+         IF NOT (filenames[i] = "." OR filenames[i] = "..") # Ignore current and up entries. #
+         THEN
+            IF (start = "" | TRUE | begins_with(filenames[i], start))
+            THEN
+               filtered +:= filenames[i];
+               (NOT (alphabetics HASELEM STRING(filenames[i][1])) | alphabetics +:= STRING(filenames[i][1]))
+            FI
+         FI
+      OD;
+
+      # Present a list of files with index numbers. Either unique first characters or full filenames. #
+      FLEX [1:0]STRING show_array := (asalphas | string_list_as_array(alphabetics) | string_list_as_array(filtered));
+      FOR i TO ELEMS show_array
+      DO
+         print((wint(i)," : ", show_array[i], new line))
+      OD;
+
+      # Let the user select a file (or first character) by index number. #
+      # Also understand a small number of commands. #
+      STRING selection;
+      INT selint := 0;
+      INT newpos;
+      BOOL got_selection := FALSE;
+      WHILE NOT got_selection
+      DO
+         print(("--> "));
+         read((selection, new line));
+
+         (selection /= "" |
+               (selection = "u" | return);  # Up one level. If at Level 1, exit. #
+               (selection = "q" | stop);    # Quit immediately. #
+
+               # If p (process) command, apply the runcmd to all files with acceptable extension in the directory. #
+               # It is possible to start with file n if p is followed by a decimal number, such as p3. #
+               IF selection[1] = "p" 
+               THEN
+                  INT start_index := 1;
+                  (ELEMS selection > 1 | start_index := clamp_int(string_to_int(selection[2:]), 1, ELEMS show_array));
+                  FOR i FROM start_index TO ELEMS show_array
+                  DO
+                     STRINGPAIR file_ext := splitext(show_array[i]);
+                     IF check_valid(last OF file_ext, accept_exts)
+                     THEN
+                        STRING runcmd := do_what+" '"+dir+"/"+show_array[i]+"'";
+                        (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)); break1);
+                        (file is regular(abort_flag_file) | break1)
+                     FI
+                  OD;
+                  break1:
+            
+                  # After processing, re-present the file list for further selections. #
+                  clear_ansi_screen;
+                  print_underlined("Level: " + wint(level) + " : " + dir + (asalphas | " (Alphabetic index)" | ""));
+                  FOR i TO ELEMS show_array
+                  DO
+                     print((wint(i)," : ", show_array[i], new line))
+                  OD
+
+               # Otherwise, we should have a valid numeric selection index. Or a help request. #
+               ELSE
+                  IF selection = "h"
+                  THEN
+                     clear_ansi_screen;
+                     print_underlined("HELP");
+                     print(("<integer> : select a directory or file to process.", new line));
+                     print(("p : process all qualifying files in a directory.", new line));
+                     print(("p<integer> : as p, but start at the <integer>th file.", new line));
+                     print(("u : move up one level, exit if current leval is 1.", new line));
+                     print(("q : quit (exit) immediately.", new line));
+                     print(("h : display this help.", new line));
+                     print_underlined("Level: " + wint(level) + " : " + dir + (asalphas | " (Alphabetic index)" | ""));
+                     FOR i TO ELEMS show_array
+                     DO
+                        print((wint(i)," : ", show_array[i], new line))
+                     OD
+                  ELSE
+                     VOID(ifromc(selection, selint, 1, newpos));
+                     (selint < 1 OR selint > ELEMS show_array |
+                           print(("Selection out of range. Try again, or h for help.", new line)); sleep_void(2) |
+                             got_selection := TRUE
+                     )
+                  FI # help or numeric. #
+               FI # process or (help or numeric). #
+         ) # selection string is not empty. #
+      OD; # while not got a valid selection or command.  #
+
+      # We have a valid selection. If showing first characters before, start using full file names. #
+      STRING newdir := (asalphas | dir | dir+"/"+show_array[selint]);
+
+      # If the thing selected is a directory, recursively descend into it. #
+      IF file is directory(newdir)
+      THEN
+         present_list(newdir, (asalphas | show_array[selint] | ""), FALSE, level+1)
+
+      # Otherwise, try to process the selection as a single file. #
+      ELSE
+         STRINGPAIR file_ext := splitext(newdir);
+         IF check_valid(last OF file_ext, accept_exts)
+         THEN            
+            STRING runcmd := do_what+" '"+newdir+"'";
+            (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)))
+         ELSE
+            put(stand error, ("File selected has unacceptable extension. Ignored.", new line));
+            sleep_void(2)
+         FI
+      FI
+
+      # NOTE: this is the point to  which recursive calls return. #
+      CO print(("HERE, level = ",wint(level),newline)); CO
+   OD;
+
+   # Return, moving up one level (or exiting). #
+   return:
+      SKIP
+);
+
+# ============ #
+# MAIN PROGRAM #
+# ============ #
+
+STRING title = "Select a file or directory from a menu and run a program on it";
+print_std_title(title + " V0.1");
+
+# Parse command line arguments. These MUST appear after --. #
+REF ARG_PARSE arg_parser := make_arg_parser(title);
+arg_set_description(arg_parser,
+"This program lets you navigate a directory tree and run a program on a single\n\
+file or on all qualifying files in a directory. This was written mainly to\n\
+provide a front end to MPV to allow music to be chosen and played in a way\n\
+I like using the command line. The defaults are suitable for doing this on\n\
+my Linux systems, but the command to run, valid file extensions and the\n\
+directory to start in can be specified as arguments, so other things can\n\
+potentially be done with it. I also use it for playing videos with mpv\n\
+and displaying PDF format e-books.");
+REF STRING root_dir := arg_add_string_option(arg_parser, "-r", "--root", "Starting directory", "/mnt/audiolib");
+REF STRING accept_exts := arg_add_string_option(arg_parser, "-e", "--exts", "Valid extensions list", ".flac,.mp3,.wav");
+REF STRING do_what := arg_add_string_option(arg_parser, "-p", "--pgm", "Program to run on each selected file", "mpv-run.sh");
+REF STRING abort_flag_file := arg_add_string_option(arg_parser, "-a", "--abortfile", "Program aborted flag file name", 
+                                                    "/tmp/mpv-abort-flag");
+REF STRING wtitle := arg_add_string_option(arg_parser, "-t", "--title", "Title string to set", "select68");
+REF BOOL use_alpha_tabs := arg_add_flag(arg_parser, "-n", "--noalphatabs", "Do not use top level alphabetic tags", TRUE);
+( NOT parse_args(arg_parser) | put(stand error, ("Unknown or malformed command line arguments.", newline)); stop );
+
+# Program title information. #
+set_ansi_title(wtitle);
+
+# Present the root directory (as leading character tab index). #
+present_list(root_dir, "", use_alpha_tabs, 1);
+
+# All done if we come here. #
+print(("Done.", new line))

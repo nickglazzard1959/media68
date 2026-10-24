@@ -1,0 +1,370 @@
+COMMENT
+A command line argument parser.
+===============================
+
+This is go at a command line argument parser for Algol 68
+along the lines of Python's argparse or the CLI11 header only library
+for C++. It isn't "feature rich", but it does the essentials quite
+cleanly, IMO. (CLI11 is nice to use ... but why does it need over
+400K of source?!).
+
+An argument parser "instance" is created with make_arg_parser().
+
+Options are added with arg_add_MODE_option() which defines an option
+(which always has a value immediately following it), sets its default
+value and returns a variable of mode MODE set to the default. Allowed
+MODEs are currently string, int and real.
+
+Flags (which control boolean values by being present or not) are
+added with arg_add_flag(). Each time they are used, they toggle the default.
+
+The parse_args() routine sets the variables to values specified on
+the command line, as well as detecting errors and outputting help.
+The variables can then be used to control the behaviour of the program.
+
+Any number of positional arguments can also be supplied. These must be
+treated as strings, of course. The number of supplied positional arguments
+can be retrieved with arg_get_n_positionals() (after parse_args() has run),
+and each postional arg can be retrieved by its positional index with
+arg_get_positional_n(). You can add descriptions for positional arguments
+which will appear in help output. If you do add descriptions, the number
+of supplied positionals must match the number of descriptions.
+
+See the TESTS section at the bottom of the file for a usage example.
+
+Some test cases, for example:
+```
+  a68g arg_parser.a68                          # OK #
+  a68g arg_parser.a68 -- -h                    # OK #
+  a68g arg_parser.a68 -- -f -t Yikes           # OK #
+  a68g arg_parser.a68 -- -f -t Yikes hello     # OK #
+  a68g arg_parser.a68 -- -f -t                 # Fail, missing argument. #
+  a68g arg_parser.a68 -- -f -t -s gg           # Fail, string argument (for -t) starts with -. #
+  a68g arg_parser.a68 -- -f -t Yikes hello -i 67  # OK (hello is a positional argument)  #
+  a68g arg_parser.a68 -- -f -t Yikes hello -i 67s # Fail, malformed integer 67s. #
+  a68g arg_parser.a68 -- -f -t Yikes hello -i -67 # OK. Integers can be negative. #
+  a68g arg_parser.a68 -- -f -t Yikes hello -i 78 *.a68 # OK. Lots of positional arguments. #
+  a68g arg_parser.a68 -- -f -t Yikes "Hello Kitty!" -i -78 *.a68 # OK. Shell handles quoted strings for us. #
+  a68g arg_parser.a68 -- --help                # OK, long form options work. #
+  a68g arg_parser.a68 -- -f -t Yikes "Hello Kitty!" -i -78 "*.a68" # OK. #
+  a68g arg_parser.a68 -- "Hello Kitty!"        # OK, positionals only allowed. #
+  a68g arg_parser.a68 -- -f -t Yikes "Hello Kitty!" -i +78 *.a68 # OK. Signed positive integers allowed. #
+  a68g arg_parser.a68 -- -f -t Yikes "Hello Kitty!" -i -78 "*.a68" -r -1.5e7  # OK. All real number fmts should work. #
+```
+
+Author: Nick Glazzard 2026.
+---------------------------
+COMMENT
+
+PR read "utility.a68" PR
+
+# Union of acceptable value types. # 
+MODE ARG_VALUE = UNION(REF STRING, REF INT, REF BOOL, REF REAL);
+
+# Option data. #
+MODE ARG_OPTION = STRUCT(STRING short,         # Single character option name. #
+                         STRING long,          # Multi-character option name. #
+                         REF ARG_VALUE avalue, # Value given for option. #
+                         BOOL is_flag,         # Option is a flag and has no following value. #
+                         STRING desc           # Description of option for help. #
+                        );
+
+# Description of all available options and the application. #
+MODE ARG_PARSE = STRUCT(FLEX [1:0] REF ARG_OPTION options, # Option definitions. #
+                        STRING app_desc,                   # Short, one line app description. #
+                        STRING long_desc,                  # Long description of application. #
+                        FLEX [1:0] STRING positionals,     # Supplied postional arguments. #
+                        FLEX [1:0] STRING positional_descs # Positional argument descriptions. #
+                       ); 
+
+# Make an argument parser. #
+PROC make_arg_parser = (STRING app_desc) REF ARG_PARSE:
+(
+   REF ARG_PARSE new = HEAP ARG_PARSE;
+   app_desc OF new := app_desc;
+   long_desc OF new := "";
+   new
+);
+
+# Add a longer description of the program. #
+PROC arg_set_description = (REF ARG_PARSE arg_parser, STRING long_desc) VOID:
+(
+   long_desc OF arg_parser := long_desc
+);
+
+# Internal functions. These just extend FLEX arrays. #
+# Add non-positional argument (option or flag). #
+PROC arg_add_any_option = (REF ARG_PARSE arg_parser, REF ARG_OPTION new) VOID:
+(
+   [UPB (options OF arg_parser) + 1] REF ARG_OPTION temp;
+   temp[: UPB (options OF arg_parser)] := options OF arg_parser;
+   options OF arg_parser := temp;
+   (options OF arg_parser)[UPB (options OF arg_parser)] := new
+);
+
+# Add a positional argument. #
+PROC arg_add_positional = (REF ARG_PARSE arg_parser, STRING posarg) VOID:
+(
+   [UPB (positionals OF arg_parser) + 1] STRING temp;
+   temp[: UPB (positionals OF arg_parser)] := positionals OF arg_parser;
+   positionals OF arg_parser := temp;
+   (positionals OF arg_parser)[UPB (positionals OF arg_parser)] := posarg
+);
+
+# Add a positional argument description. #
+PROC arg_add_positional_description = (REF ARG_PARSE arg_parser, STRING posarg_desc) VOID:
+(
+   [UPB (positional_descs OF arg_parser) + 1] STRING temp;
+   temp[: UPB (positional_descs OF arg_parser)] := positional_descs OF arg_parser;
+   positional_descs OF arg_parser := temp;
+   (positional_descs OF arg_parser)[UPB (positional_descs OF arg_parser)] := posarg_desc
+);
+
+# Add an option for an integer argument. E.g. -i, --intopt, "An integer option", 999 #
+PROC arg_add_int_option = (REF ARG_PARSE arg_parser, STRING short, STRING long, STRING desc, 
+                           INT uvalue) REF INT:
+(
+   REF ARG_OPTION new_option = HEAP ARG_OPTION;
+   REF ARG_VALUE new_value = HEAP ARG_VALUE;
+   REF INT value = HEAP INT := uvalue;
+   CO REF INT(value) := uvalue; Cast example. CO
+   new_value := value;
+   new_option := (short, long, new_value, FALSE, desc);
+   arg_add_any_option(arg_parser, new_option);
+   value
+);
+
+# Add an option with a string argument. E.g. -s, --stringopt, "A string option", "Default" #
+PROC arg_add_string_option = (REF ARG_PARSE arg_parser, STRING short, STRING long, STRING desc, 
+                              STRING uvalue) REF STRING:
+(
+   REF ARG_OPTION new_option = HEAP ARG_OPTION;
+   REF ARG_VALUE new_value = HEAP ARG_VALUE;
+   REF STRING value = HEAP STRING := uvalue;
+   new_value := value;
+   new_option := (short, long, new_value, FALSE, desc);
+   arg_add_any_option(arg_parser, new_option);
+   value
+);
+
+# Add an option for a real argument. E.g. -r, --realopt, "A real option", 3.14159 #
+PROC arg_add_real_option = (REF ARG_PARSE arg_parser, STRING short, STRING long, STRING desc, 
+                           REAL uvalue) REF REAL:
+(
+   REF ARG_OPTION new_option = HEAP ARG_OPTION;
+   REF ARG_VALUE new_value = HEAP ARG_VALUE;
+   REF REAL value = HEAP REAL := uvalue;
+   new_value := value;
+   new_option := (short, long, new_value, FALSE, desc);
+   arg_add_any_option(arg_parser, new_option);
+   value
+);
+
+# Add a flag, which has no argument.Sets a BOOL variable. E.g. -f, --flag, "A flag", TRUE #
+PROC arg_add_flag = (REF ARG_PARSE arg_parser, STRING short, STRING long, STRING desc, 
+                     BOOL uvalue) REF BOOL:
+(
+   REF ARG_OPTION new_option = HEAP ARG_OPTION;
+   REF ARG_VALUE new_value = HEAP ARG_VALUE;
+   REF BOOL value = HEAP BOOL := uvalue;
+   new_value := value;
+   new_option := (short, long, new_value, TRUE, desc);
+   arg_add_any_option(arg_parser, new_option);
+   value
+);
+
+# Get the number of supplied positional arguments. #
+PROC arg_get_n_positionals = (REF ARG_PARSE arg_parser) INT:
+(
+   ELEMS (positionals OF arg_parser)
+);
+
+# Get the n-th positional argument. If the index is invalid, return empty string. #
+PROC arg_get_positional_n = (REF ARG_PARSE arg_parser, INT n) STRING:
+(
+   (n < 1 OR n > (ELEMS (positionals OF arg_parser)) | "" | (positionals OF arg_parser)[n])
+);
+
+# Parse user supplied command line args and update the variables they are associated with. #
+PROC parse_args = (REF ARG_PARSE arg_parser) BOOL:
+(
+   # Add a help option always. #
+   REF BOOL do_help := arg_add_flag(arg_parser, "-h", "--help", "Display help and exit.", FALSE);
+
+   # OK so far. #
+   BOOL ok := TRUE;
+
+   # Arguments for the program begin after -- (earlier ones are for a68g). #
+   INT cur_arg := argc + 1;
+   FOR i TO argc
+   DO
+      (argv(i) = "--" | (i < argc | cur_arg := i + 1; found_args))
+   OD;
+   found_args:
+
+   # Step over the supplied arguments intended for the program. #
+   WHILE cur_arg <= argc
+   DO
+      STRING opt_name := argv(cur_arg);
+
+      # See if the option has been defined. #
+      BOOL matched := FALSE;
+      FOR i TO ELEMS (options OF arg_parser)
+      DO
+         IF (opt_name = (short OF (options OF arg_parser)[i])) OR 
+            (opt_name = (long OF (options OF arg_parser)[i]))
+         THEN
+            # Get the argument of int and string options, checking it exists. #
+            CASE (avalue OF (options OF arg_parser)[i])
+            IN
+               (REF INT ivalue): ( matched := TRUE;
+                                   (cur_arg = argc | put(stand error, ("Missing argument for ",opt_name,newline)); 
+                                                     ok := FALSE; fail);
+                                   cur_arg +:= 1;
+                                   (NOT all_digits_signed(argv(cur_arg)) | 
+                                         put(stand error, ("Malformed integer supplied for ",
+                                                           opt_name,newline)); 
+                                         ok := FALSE; fail);
+                                   ivalue := string_to_int(argv(cur_arg))
+                                 ),
+               (REF REAL rvalue): ( matched := TRUE;
+                                   (cur_arg = argc | put(stand error, ("Missing argument for ",opt_name,newline)); 
+                                                     ok := FALSE; fail);
+                                   cur_arg +:= 1;
+                                   (NOT string_to_real(argv(cur_arg), rvalue, TRUE) |
+                                         put(stand error, ("Malformed real number supplied for ",
+                                                           opt_name,newline)); 
+                                         ok := FALSE; fail)
+                                 ),
+               (REF STRING svalue): ( matched := TRUE;
+                                      (cur_arg = argc | put(stand error, ("Missing argument for ",opt_name,newline)); 
+                                                        ok := FALSE; fail);
+                                      cur_arg +:= 1;
+                                      svalue := argv(cur_arg);
+                                      IF ELEMS svalue > 0
+                                      THEN
+                                         (svalue[1] = "-" | 
+                                               put(stand error, ("String argument cannot start with - option: ",
+                                                                 opt_name,newline)); 
+                                               svalue := ""; ok := FALSE; fail)
+                                      FI
+                                    ), 
+               (REF BOOL bvalue): ( matched := TRUE; 
+                                    bvalue := NOT bvalue
+                                  )
+            OUT
+               SKIP
+            ESAC
+         FI
+      OD; # search over defined options. #
+
+      IF NOT matched
+      THEN
+         # If opt_name starts with - an option was supplied that is unknown. Give up. #
+         IF opt_name[1] = "-"
+         THEN
+            put(stand error, ("Unknown argument ", opt_name, newline)); 
+            ok := FALSE; 
+            fail
+
+         # Otherwise, treat it as a positional argument. #
+         ELSE
+            arg_add_positional(arg_parser, opt_name)
+         FI
+      FI; # Argument was not found in declared options. #
+
+      # Move to the next input argument. #
+      cur_arg +:= 1
+   OD; # loop over supplied arguments. #
+
+   # The number of supplied positional arguments should now match the number of positional descriptions #
+   IF (ELEMS (positional_descs OF arg_parser) > 0) AND NOT do_help
+   THEN
+      IF ELEMS (positional_descs OF arg_parser) /= ELEMS (positionals OF arg_parser)
+      THEN
+         put(stand error, ("Number of supplied positional arguments does not match the number described.", new line));
+         ok := FALSE;
+         fail
+      FI
+   FI;
+
+   # If help has been requested, output it and exit. #
+   IF do_help
+   THEN
+      print((newline, app_desc OF arg_parser, newline, (ELEMS app_desc OF arg_parser * "-"), newline));
+
+      IF long_desc OF arg_parser /= ""
+      THEN
+         print((new line));
+         STRING out_string := long_desc OF arg_parser;
+         INT newline_pos := 1;
+         WHILE string in string("\n", newline_pos, out_string)
+         DO
+            print((out_string[:newline_pos-1], new line));
+            out_string := out_string[newline_pos+2:]
+         OD;
+         (ELEMS out_string > 0 | print((out_string, new line)));
+         print((new line))
+      FI;
+
+      FOR i TO ELEMS (options OF arg_parser)
+      DO
+         print(((short OF (options OF arg_parser)[i]),", "));
+         print(((long OF (options OF arg_parser)[i]),", "));
+         print((((is_flag OF (options OF arg_parser)[i]) | "(flag)" | "(option)")," : "));
+         print(((desc OF (options OF arg_parser)[i])));
+         print((newline))
+      OD;
+      print((newline));
+
+      IF ELEMS (positional_descs OF arg_parser) > 0
+      THEN
+         print(("Positional arguments:", newline));
+         FOR i TO ELEMS (positional_descs OF arg_parser)
+         DO
+            print((wint(i), ": ", (positional_descs OF arg_parser)[i], newline))
+         OD;
+         print((newline))
+      FI;
+
+      stop
+   FI;
+
+   # Return with status. #
+   fail:
+   ok
+);
+
+# ------ #
+# TESTS. #
+# ------ #
+
+IF FALSE
+THEN
+
+REF ARG_PARSE arg_parser := make_arg_parser("Test command line argument parsing");
+arg_set_description(arg_parser,
+"This is a longer description of this test program.\n\
+It should be able to span several lines.\n\
+Hopefully.");
+REF INT ival := arg_add_int_option(arg_parser, "-i", "--intval", "Integer", 999);
+REF STRING sval := arg_add_string_option(arg_parser, "-s", "--strval", "String", "Nuts");
+REF STRING sval2 := arg_add_string_option(arg_parser, "-t", "--strval2", "Another string", "More nuts");
+REF REAL rval := arg_add_real_option(arg_parser, "-r", "--realval", "Real", 3.14159);
+REF BOOL bflag := arg_add_flag(arg_parser, "-f", "--flagval", "Flag", FALSE);
+( NOT parse_args(arg_parser) | put(stand error, ("Unknown or malformed command line arguments.", newline)); stop );
+
+print(("ival = ",ival,new line));
+print(("sval = ",sval,new line));
+print(("sval2 = ",sval2,new line));
+print(("bval = ",bflag,new line));
+print(("rval = ",rval,new line));
+print(("Number of positional arguments = ", wint(arg_get_n_positionals(arg_parser)), new line));
+IF arg_get_n_positionals(arg_parser) > 0
+THEN
+   FOR i TO arg_get_n_positionals(arg_parser)
+   DO
+      print((wint(i)," = ", arg_get_positional_n(arg_parser, i), new line))
+   OD
+FI
+FI;
