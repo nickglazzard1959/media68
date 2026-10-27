@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1,BR-Klassik
+https://streams.br.de/br-klassik_2.m3u
+#EXTINF:-1,BR-Klassik-256kbs
+https://streams.br.de/br-klassik_3.m3u

@@ -45,7 +45,7 @@ default terminal file contents reflect this application.
 Processing for a local audio/music library was quickly added, once
 accessing the video library was found to work.
 
-Processing for e-books has also ben added.
+Processing for e-books has also been added.
 
 It is possible to specify any program or shell script file to be
 run to generate the contents of a terminal HTML file, though, so

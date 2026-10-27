@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run MPV using a hack to determine if it was manually exited or not.
-# You must also put this in: ~/.config/mpv/input.conf
+# You must also put the following line in: ~/.config/mpv/input.conf
 # q quit 4
 # 
 rm -f /tmp/mpv-abort-flag

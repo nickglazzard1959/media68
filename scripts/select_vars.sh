@@ -1,14 +1,25 @@
 #!/bin/bash
 #
-# Source this to set up environment variables for the select programs.
+# Source this to set up environment variables for the media68 programs.
+# Before that, edit it as necessary.
 #
-export RADIO68_LISTS="/home/nick/BBC"
-export RADIO68_PGM="/home/nick/gitprojects/select68"
+# Where is the media68 software?
+export MEDIA68_HOME="/home/nick/gitprojects/media68"
+#
+# Where are the internet radio stream definition (.m3u) files?
+export RADIO68_LISTS="${MEDIA68_HOME}/radio_lists"
+#
+# Where are the top level directories for the various media libraries?
 export VIDEO68_MOUNT="/mnt/videolib"
-export VIDEO68_PGM="/home/nick/gitprojects/select68"
 export AUDIO68_MOUNT="/mnt/audiolib"
-export AUDIO68_PGM="/home/nick/gitprojects/select68"
-export CLOCK68_PGM="/home/nick/gitprojects/vcpgui68"
 export BOOKS68_MOUNT="/mnt/booklib"
-export BOOKS68_PGM="/home/nick/gitprojects/select68"
+#
+# Which program is to be used to view PDF files?
 export BOOKS68_VIEWER="atril"
+#
+# --- DO NOT CHANGE BELOW THIS POINT ---
+#
+export RADIO68_PGM=${MEDIA68_HOME}
+export VIDEO68_PGM=${MEDIA68_HOME}
+export AUDIO68_PGM=${MEDIA68_HOME}
+export BOOKS68_PGM=${MEDIA68_HOME}
