@@ -359,7 +359,7 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
                               new_terminal_output) /= 0 | ec +:= 1; retval := 7);
                         STRING link := "<a href=""" + external_files_s + """>" + presented_name + "</a><br>";
                         (append_lines((link), new_terminal_output) /= 0 | ec +:= 1; retval := 6);
-                        (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8);
+                        (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8)
                   )
 
                # Or run a specified program. #

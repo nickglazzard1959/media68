@@ -1425,6 +1425,10 @@ PROC all_files = (STRING root, STRING exts, ALL_FILES_PROC action, BOOL no_recur
 PROC all_files_ex = (STRING root, STRING exts, ALL_FILES_PROC action, BOOL no_recurse, BOOL yield_dirs,
                      STRING_SORT_PROC sorter) VOID:
 (
+   (NOT file is directory(root) |
+         put(stand error, ("all_files_ex(): Supplied root is not a directory (or does not exist).", new line));
+         done
+   );
    FLEX [1:0]STRING cur_files := sorter( get directory(root) );
    FOR i TO ELEMS cur_files
    DO
