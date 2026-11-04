@@ -1,0 +1,39 @@
+# Using the default heap size works, but very slowly! #
+# It seems heap size can be a major performance factor. #
+# Default heap (std test) 11 minutes (29 with GC statistics being collected), bigger heap 3 seconds! #
+# 13 GCs, ~0.1s with 256 MB heap. #
+# 512,927 GCs, 1763s with default heap! #
+PR heap=256M PR
+
+PR read "utility.a68" PR
+PR read "dictionaries.a68" PR
+PR read "arg_parser.a68" PR
+
+PROC convert_file_name = (STRING s) BOOL:
+(
+   CO print((s, new line)); CO
+   STRING filename := last OF splitpath(s);
+   FLEX [1:0]STRING nameparts := split_string(filename, "_");
+   (ELEMS nameparts /= 8 |
+         put(stand error, ("Unexpected parts count, bad file name: ", filename, newline));
+         stop
+   );
+   INT dayno := string_to_int(nameparts[4]);
+   STRING sweekno := wint( clamp_int(((dayno - 1) % 7) + 1, 1, 4) );
+   STRING treepath := output_root + "/" + nameparts[2] + "/" + nameparts[3] + "/" + sweekno;
+   STRING link := nameparts[5] + "_" + nameparts[6] + "_" + nameparts[7] + "_" + nameparts[8][:2];
+   print((treepath," ",link," --> ",s,newline));
+   create_directory(treepath);
+   create_symlink(s, treepath + "/" + link + ".jpg");
+   FALSE
+);
+
+STRING root := "/massbackup/contents/photos/masterphdb/photos";
+STRING exts := ".jpg";
+STRING output_root := "testphotos";
+all_files(root, exts, convert_file_name, TRUE, TRUE);
+
+print(("Garbage collection info:", new line));
+print(("  bytes collected = ", garbage, new line));
+print(("  collection runs = ", collections, new line));
+print(("  seconds used = ", collect seconds, new line))

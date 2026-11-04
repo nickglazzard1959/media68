@@ -83,16 +83,16 @@ PROC get_run_envars = []STRING:
    envars
 );
 
-# Run a command. Any output will go directly to stand out and error. #
+# Run a command. Any output will go directly to stand out and error. Return TRUE if cmd return status is 0. #
 PROC run_command = (STRING cmd) BOOL:
 (
    BOOL retval := FALSE;
    FLEX [1:0]STRING envars := get_run_envars;
-   INT pid := execve child("/bin/sh", ("sh", "-c", cmd), envars);
+   INT pid := execve child("/bin/sh", ("sh", "-c", cmd+"; ST=$?; exit $ST"), envars);
    IF pid >= 0 
    THEN
       INT wstatus := wait pid(pid);
-      (wstatus >= 0 | retval := TRUE)
+      retval := (wstatus = 0)
    FI;
    retval
 );
@@ -1487,6 +1487,35 @@ PROC get_directory_filtered = (STRING root, STRING exts) []STRING:
    OD;
    
    string_list_as_array(files)
+);
+
+# Create a directory (all elements) if it does not exist. #
+PROC create_directory = (STRING path) BOOL:
+(
+   BOOL retval := TRUE;
+   STRING cpath := cleanpath(path);
+
+   IF NOT file is directory(cpath)
+   THEN
+      retval := run_command("mkdir -p " + cpath)
+   FI;
+
+   retval
+);
+
+# Create a symbolic link if it does not exist. #
+PROC create_symlink = (STRING existing_file, new_symlink) BOOL:
+(
+   BOOL retval := TRUE;
+   STRING cexisting_file := cleanpath(existing_file);
+   STRING cnew_symlink := cleanpath(new_symlink);
+
+   IF (file is regular(cexisting_file) AND NOT file is link(cnew_symlink) AND NOT file is regular(cnew_symlink))
+   THEN
+      retval := run_command("ln -s  " + cexisting_file + " " + cnew_symlink)
+   FI;
+
+   retval
 );
 
 

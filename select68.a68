@@ -56,6 +56,10 @@ PROC sorted_filenames_in_directory = (STRING dir, STRING exts) []STRING:
    INT n := ELEMS names;
    [n]STRING modified_names;
    [n]STRING sorted_names;
+   IF image_mode
+   THEN
+      sorted_names := SORT names
+   ELSE
    FOR i TO n
    DO 
       # Split the file name into space separated words. #
@@ -77,7 +81,8 @@ PROC sorted_filenames_in_directory = (STRING dir, STRING exts) []STRING:
    # Sort the modified names with an index sort. #
    FLEX [1:0]INT indices := isort_strings(modified_names);
    # Return the original file names sorted according to the modified names. #
-   FOR i TO n DO sorted_names[i] := names[indices[i]] OD;
+   FOR i TO n DO sorted_names[i] := names[indices[i]] OD
+   FI;
    sorted_names
 );
 
@@ -146,19 +151,26 @@ PROC present_list = (STRING dir, STRING start, BOOL asalphas, INT level) VOID:
                # It is possible to start with file n if p is followed by a decimal number, such as p3. #
                IF selection[1] = "p" 
                THEN
-                  INT start_index := 1;
-                  (ELEMS selection > 1 | start_index := clamp_int(string_to_int(selection[2:]), 1, ELEMS show_array));
-                  FOR i FROM start_index TO ELEMS show_array
-                  DO
-                     STRINGPAIR file_ext := splitext(show_array[i]);
-                     IF check_valid(last OF file_ext, accept_exts)
-                     THEN
-                        STRING runcmd := do_what+" '"+dir+"/"+show_array[i]+"'";
-                        (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)); break1);
-                        (file is regular(abort_flag_file) | break1)
-                     FI
-                  OD;
-                  break1:
+                  IF image_mode
+                  THEN
+                     STRING runcmd := do_what+" -t '"+dir+"'";
+                     (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)))
+                  ELSE
+                     INT start_index := 1;
+                     (ELEMS selection > 1 | start_index := clamp_int(string_to_int(selection[2:]), 1, ELEMS show_array));
+                     FOR i FROM start_index TO ELEMS show_array
+                     DO
+                        STRINGPAIR file_ext := splitext(show_array[i]);
+                        IF check_valid(last OF file_ext, accept_exts)
+                        THEN
+                           STRING runcmd := do_what+" '"+dir+"/"+show_array[i]+"'";
+                           (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)); break1);
+                           (file is regular(abort_flag_file) | break1)
+                        FI
+                     OD;
+                     break1:
+                     SKIP
+                  FI;
             
                   # After processing, re-present the file list for further selections. #
                   clear_ansi_screen;
@@ -243,7 +255,9 @@ I like using the command line. The defaults are suitable for doing this on\n\
 my Linux systems, but the command to run, valid file extensions and the\n\
 directory to start in can be specified as arguments, so other things can\n\
 potentially be done with it. I also use it for playing videos with mpv\n\
-and displaying PDF format e-books.");
+and displaying PDF format e-books. It can also be used for browsing photographs\n\
+if these are arranged in a year/month/week directory tree (using nsxiv\n\
+for image display).");
 REF STRING root_dir := arg_add_string_option(arg_parser, "-r", "--root", "Starting directory", "/mnt/audiolib");
 REF STRING accept_exts := arg_add_string_option(arg_parser, "-e", "--exts", "Valid extensions list", ".flac,.mp3,.wav");
 REF STRING do_what := arg_add_string_option(arg_parser, "-p", "--pgm", "Program to run on each selected file", "mpv-run.sh");
@@ -251,6 +265,7 @@ REF STRING abort_flag_file := arg_add_string_option(arg_parser, "-a", "--abortfi
                                                     "/tmp/mpv-abort-flag");
 REF STRING wtitle := arg_add_string_option(arg_parser, "-t", "--title", "Title string to set", "select68");
 REF BOOL use_alpha_tabs := arg_add_flag(arg_parser, "-n", "--noalphatabs", "Do not use top level alphabetic tags", TRUE);
+REF BOOL image_mode := arg_add_flag(arg_parser, "-i", "--imagemode", "Configure for displaying photos", FALSE);
 ( NOT parse_args(arg_parser) | put(stand error, ("Unknown or malformed command line arguments.", newline)); stop );
 
 # Program title information. #
