@@ -25,6 +25,15 @@ PROC convert_file_name = (STRING s) BOOL:
    print((treepath," ",link," --> ",s,newline));
    create_directory(treepath);
    create_symlink(s, treepath + "/" + link + ".jpg");
+
+   # Generate thumbnail version if it doesn't exist. #
+   STRING thumbpath := treepath + "/thumbnails";
+   create_directory(thumbpath);
+   STRING thumbname := thumbpath + "/" + link + ".jpg";
+   IF NOT file is regular(thumbname)
+   THEN
+      image_resize_to_width(s, 200, thumbname)
+   FI;
    FALSE
 );
 

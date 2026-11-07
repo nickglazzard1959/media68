@@ -18,6 +18,8 @@ Author: Nick Glazzard 2026
 --------------------------
 COMMENT
 
+PR read "dictionaries.a68" PR
+
 # --------------------------- #
 # Sundry and OS related aids. #
 # --------------------------- #
@@ -97,6 +99,21 @@ PROC run_command = (STRING cmd) BOOL:
    retval
 );
 
+# Run a command in the background. Any output will go directly to stand out and error. #
+# Return TRUE if cmd return status is 0. #
+PROC run_command_detached = (STRING cmd) BOOL:
+(
+   BOOL retval := FALSE;
+   FLEX [1:0]STRING envars := get_run_envars;
+   INT pid := execve child("/bin/sh", ("sh", "-c", cmd+" &"), envars);
+   IF pid >= 0 
+   THEN
+      INT wstatus := wait pid(pid);
+      retval := (wstatus = 0)
+   FI;
+   retval
+);
+
 # Run a command in sh and retrieve the output as a string. Adapted from a68g docs. #
 PROC run_command_get_output = (STRING cmd, REF STRING output) BOOL:
 (
@@ -108,6 +125,13 @@ PROC run_command_get_output = (STRING cmd, REF STRING output) BOOL:
       retval := TRUE
    FI;
    retval
+);
+
+# Check if a command exists on this machine. #
+PROC command_exists = (STRING cmd) BOOL:
+(
+   STRING check_cmd := "command -v " + cmd + " > /dev/null";
+   run_command(check_cmd)
 );
 
 # Return a string denoting the OS being used (debian, ubuntu, macos or linux for now). #
@@ -1504,7 +1528,7 @@ PROC create_directory = (STRING path) BOOL:
 );
 
 # Create a symbolic link if it does not exist. #
-PROC create_symlink = (STRING existing_file, new_symlink) BOOL:
+PROC create_symlink = (STRING existing_file, STRING new_symlink) BOOL:
 (
    BOOL retval := TRUE;
    STRING cexisting_file := cleanpath(existing_file);
@@ -1518,6 +1542,31 @@ PROC create_symlink = (STRING existing_file, new_symlink) BOOL:
    retval
 );
 
+# Rename a file. #
+PROC rename_file = (STRING old_name, STRING new_name) BOOL:
+(
+   BOOL retval := FALSE;
+
+   IF file is regular(old_name)
+   THEN
+      retval := run_command("mv " + old_name + " " + new_name)
+   FI;
+
+   retval
+);
+
+# Delete a file. #
+PROC delete_file = (STRING name, BOOL force) BOOL:
+(
+   BOOL retval := FALSE;
+
+   IF file is regular(name)
+   THEN
+      retval := run_command("rm " + (force | "-f " | "" ) + name)
+   FI;
+
+   retval
+);
 
 # ----------- #
 # Array aids. #
@@ -1696,6 +1745,69 @@ PROC read_2d_real_array = (STRING filename) [,]REAL:
 OP ARRAYEMPTY = ([,]REAL array) BOOL:
 (
    (1 ELEMS array * 2 ELEMS array ) = 0
+);
+
+
+# ---------------------------------------------- #
+# Minimal image processing based on ImageMagick. #
+# ---------------------------------------------- #
+
+STRING global_convert_pgm := "";
+STRING global_display_pgm := "";
+
+# Get the name of the convert program that works here (sigh). #
+PROC image_get_convert_name = STRING:
+(
+   STRING retval := "";
+   IF global_convert_pgm = ""
+   THEN
+      (command_exists("magick") | retval := "magick" | 
+            (command_exists("convert") | retval := "convert"));
+      global_convert_pgm := retval
+   ELSE
+      retval := global_convert_pgm
+   FI;
+   retval
+);
+
+# Scale an image in a file to a specifed width. Put result in another file. #
+PROC image_resize_to_width = (STRING infile, INT width, STRING outfile) BOOL:
+(
+   BOOL retval := TRUE;
+   STRING convert := image_get_convert_name;
+   (convert = "" | retval := FALSE |
+         STRING cmd := convert + " " + infile + " -resize " + wint(width) + "x " + outfile;
+         retval := run_command(cmd)
+   );
+   retval
+);
+
+# Get the name of the display program that works here (sigh). #
+PROC image_get_display_name = STRING:
+(
+   STRING retval := "";
+   IF global_display_pgm = ""
+   THEN
+      (command_exists("nsxiv") | retval := "nsxiv" |
+            (command_exists("magick") | retval := "magick display" | 
+                  (command_exists("convert") | retval := "convert")));
+      global_display_pgm := retval
+   ELSE
+      retval := global_display_pgm
+   FI;
+   retval
+);
+
+# Display an image from a file. #
+PROC image_display = (STRING name, BOOL detach) BOOL:
+(
+   BOOL retval := TRUE;
+   STRING display := image_get_display_name;
+   (display = "" | retval := FALSE |
+         STRING cmd := display + " " + name;
+         retval := (detach | run_command_detached(cmd) | run_command(cmd))
+   );
+   retval
 );
 
 
