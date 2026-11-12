@@ -11,6 +11,7 @@ PR read "arg_parser.a68" PR
 
 PROC convert_file_name = (STRING s) BOOL:
 (
+   # Get the PhotoX full resolution image name and split it into time components. #
    CO print((s, new line)); CO
    STRING filename := last OF splitpath(s);
    FLEX [1:0]STRING nameparts := split_string(filename, "_");
@@ -18,28 +19,72 @@ PROC convert_file_name = (STRING s) BOOL:
          put(stand error, ("Unexpected parts count, bad file name: ", filename, newline));
          stop
    );
+
+   # Find the output directory name and unique file name. #
    INT dayno := string_to_int(nameparts[4]);
    STRING sweekno := wint( clamp_int(((dayno - 1) % 7) + 1, 1, 4) );
    STRING treepath := output_root + "/" + nameparts[2] + "/" + nameparts[3] + "/" + sweekno;
-   STRING link := nameparts[5] + "_" + nameparts[6] + "_" + nameparts[7] + "_" + nameparts[8][:2];
-   print((treepath," ",link," --> ",s,newline));
-   create_directory(treepath);
-   create_symlink(s, treepath + "/" + link + ".jpg");
+   STRING link := nameparts[4] + "_" + nameparts[5] + "_" + nameparts[6] + "_" + nameparts[7] + "_" + nameparts[8][:2];
+   CO print((treepath," ",link," --> ",s,newline)); CO
+   (NOT create_directory(treepath) | 
+         put(stand error, ("ERROR: Failed to create directory: ", treepath, new line)));
+
+   #  Find the full link image file name and create a new link if it doesn't exist. #
+   STRING link_file_name := treepath + "/" + link + ".jpg";
+   IF NOT file is link(link_file_name)
+   THEN
+      print((treepath," ",link," --> ",s,newline));
+      (NOT create_symlink(s, link_file_name) |
+            put(stand error, ("ERROR: Failed to create symbolic link: ", link_file_name, new line)))
+   FI;
 
    # Generate thumbnail version if it doesn't exist. #
    STRING thumbpath := treepath + "/thumbnails";
-   create_directory(thumbpath);
+   (NOT create_directory(thumbpath) |
+         put(stand error, ("ERROR: Failed to create thumbnail directory: ", thumbpath, new line)));
    STRING thumbname := thumbpath + "/" + link + ".jpg";
    IF NOT file is regular(thumbname)
    THEN
-      image_resize_to_width(s, 200, thumbname)
+      (NOT image_resize_to_width(s, 200, thumbname) | 
+            put(stand error, ("ERROR: Failed to create thumbnail image: ", thumbname, new line)))
    FI;
    FALSE
 );
 
-STRING root := "/massbackup/contents/photos/masterphdb/photos";
-STRING exts := ".jpg";
-STRING output_root := "testphotos";
+# ============ #
+# MAIN PROGRAM #
+# ============ #
+
+STRING title = "Process a PhotoX database to a link farm and new thumbnails.";
+print_std_title(title + " V0.1");
+
+# Parse command line arguments. These MUST appear after --. #
+REF ARG_PARSE arg_parser := make_arg_parser(title);
+arg_set_description(arg_parser,
+"This program takes a PhotoX database, as produced by the PhotoX or photohack programs,\n\
+and converts it to a directory tree with symbolic links to the PhotoX images. It also\n\
+produces new thumbnail images at a resolution better suited to web browser viewing.\n\
+The output tree starts with directories for every year present. Overall:\n\
+year / month / week_number. The week_number directory then contains links to the\n\
+full resolution PhotoX images, with names: dd_hh_mm_ss_xx.jpg, a unique name that\n\
+represents the date and time the photograph was taken. The directory:\n\
+year / month / week_number / thumbnails contains thumbnail images. The output tree\n\
+will typically be used as a photo library (maybe named photolib) and shared via SMB.\n\
+This tree can be processed by files_to_html to create a static website version.\n\
+It can also be browsed by select68 in photo mode.");
+REF STRING root := arg_add_string_option(arg_parser, "-r", "--root", 
+                                         "File tree root directory.", 
+                                         "photox/photos");
+REF STRING exts := arg_add_string_option(arg_parser, "-e", "--exts", 
+                                         "File extensions to notice.", 
+                                         ".jpg");
+REF STRING output_root := arg_add_string_option(arg_parser, "-o", "--outdir",
+                                                "Output directory for link and thumbnail tree.", 
+                                                "photox_tree");
+( NOT parse_args(arg_parser) | 
+      put(stand error, ("Unknown or malformed command line arguments.", newline)); stop );
+
+# Generate the link tree. #
 all_files(root, exts, convert_file_name, TRUE, TRUE);
 
 print(("Garbage collection info:", new line));
