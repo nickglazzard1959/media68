@@ -382,6 +382,17 @@ OP > = (HMSTIME a, HMSTIME b) BOOL:
    secs_diff > 0
 );
 
+# Convert a month number to a month name. #
+PROC month_name = (INT umonth) STRING:
+(
+   []STRING month_names = ("January", "February", "March",
+                           "April", "May", "June",
+                           "July", "August", "September",
+                           "October", "November", "December");
+   INT month := clamp_int(umonth, 1, 12);
+   month_names[month]
+);
+
 
 # ------------------------ #
 # Numeric range etc. aids. #
@@ -520,6 +531,15 @@ PROC string_in_row_of_strings = (STRING s, []STRING r) INT:
    retval
 );
 
+# Print all elements of a row of strings. #
+PROC print_row_of_strings = ([]STRING r) VOID:
+(
+   FOR i TO ELEMS r
+   DO
+      print((r[i], new line))
+   OD
+);
+
 # Trim leading blanks from a string. #
 PROC trim_leading = (STRING s) STRING:
 (
@@ -633,6 +653,13 @@ PROC replace_string = (STRING s, STRING old, STRING new, BOOL all) STRING:
    break1:
    changed +:= s[start:];
    changed
+);
+
+# Escape single quote characters in a Bash literal string. Tricky. #
+PROC escape_quotes = (STRING s) STRING:
+(
+   # Close the literal string. Add a single quote. Restart a literal string. Let them concatenate. #
+   replace_string(s, "'", "'\''", TRUE)
 );
 
 # Check if a string is in a comma separated list of valid strings. #
@@ -1136,6 +1163,35 @@ PROC ends_with = (STRING s, STRING b) BOOL:
    retval
 );
 
+# Apply ordinal suffixes to strings representing integers. #
+PROC add_ordinal_suffix = (STRING n) STRING:
+(
+   STRING retval := n;
+   INT n_size := ELEMS n;
+   IF n_size > 1
+   THEN
+      STRING last_2 := n[n_size-1:];
+      (last_2 = "11" OR last_2 = "12" OR last_2 = "13" | retval +:= "th"; done)
+   FI;
+   (n[n_size] = "1" | retval +:= "st"; done);
+   (n[n_size] = "2" | retval +:= "nd"; done);
+   (n[n_size] = "3" | retval +:= "rd"; done);
+   retval +:= "th";
+   done:
+   retval
+);
+
+# Remove leading zeros from a string representing an integer. #
+PROC strip_leading_zeros = (STRING n) STRING:
+(
+   INT start := 1;
+   FOR i TO ELEMS n
+   DO
+      (n[i] /= "0" | start := i; break1)
+   OD;
+   break1:
+   n[start:]
+);
 
 # ---------- #
 # File aids. #

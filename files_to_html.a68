@@ -22,7 +22,7 @@ which, by default, only serve files from their own HTML tree
 (e.g. /var/www/html/...). For example, an SMB share on another machine
 on the LAN may be mounted at /mnt/videolib. This is the file tree to
 be converted to HTML links, but the terminal files must be referenced
-with a root explicity declared to the web server as an alias. As an example, this
+with a root explicitly declared to the web server as an alias. As an example, this
 addition to an NGINX configuration file makes /mnt/videolib/... capable of
 being referenced as /external-files/...
 
@@ -46,6 +46,9 @@ Processing for a local audio/music library was quickly added, once
 accessing the video library was found to work.
 
 Processing for e-books has also been added.
+
+There is also processing for a photo library, but this may be so
+specific to my needs that it isn't generally useful.
 
 It is possible to specify any program or shell script file to be
 run to generate the contents of a terminal HTML file, though, so
@@ -93,12 +96,32 @@ This is very similar to the audio library case. The "book" built-in processing j
 links to the PDF files, though -- no 'player' is needed. It is assumed the browser can find
 a suitable way of displaying PDF files itself.
 
+To generate HTML pages for a photo library:
+a68g files_to_html.a68 -- -r /mnt/photolib -o photoexp -p photo -v -e '.jpg' --multi 
+   -f external-files4 -i pindex.html -t "Photo Collection"
+
+This builds web pages for a photo collection in a directory called photoexp. The terminal
+file processing is set to the internal photo path. The file tree being processed is assumed
+to be: year / month / week directories with terminal files named: dd_hh_mm_ss_uid.jpg.
+There must also be a subdirectory at the level containing the full resolution terminal
+files called thumbnails. This must contain pre-computed thumnail images of each full
+resolution image with a fixed width of 200 pixels and the same name as the full size
+image.
+
+
 Scripts
 -------
 
 mountaudio.sh - Example of mounting an audio library from an SMB share.
 mountvideo.sh - Example of mounting a video library from an SMB share.
 mountbooks.sh - Example of mounting a book library from an SMB share.
+mountphotos.sh - Example of mounting a photo library from an SMB share.
+
+rebuild_audio_site.sh - Example of rebuilding a static website for audio assets.
+rebuild_video_site.sh - Example of rebuilding a static website for video assets.
+rebuild_book_site.sh - Example of rebuilding a static website for book assets.
+rebuild_photo_site.sh - Example of rebuilding a static website for photo assets.
+
 map-video-files.sh - Example of how to organise (mostly) flat files using symbolic links for files_to_html.a68.
 fix-720-aspect.sh - Make 576x720 16:9 video appear with the correct aspect ratio in an HTML 5 video player.
 
@@ -181,6 +204,9 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
    INT html_file_count := 0;
    STRING html_output := uhtml_output;
 
+   # Keep a list of HTML files used as directory mimics for 'photo' processing. #
+   REF STRING_LIST used_dir_mimics := STRING_LIST_INIT LOC STRING_LIST;
+
    # Empty the HTML file output directory. #
    (NOT run_command("rm -rf " + uhtml_output) | retval := 1; ec +:= 1; done);
    (NOT run_command("mkdir " + uhtml_output) | retval := 2; ec +:= 1; done);
@@ -204,11 +230,14 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
    # allow that tree to be navigated. The s string is a file name in the directory tree. #
    PROC make_html_files = (STRING s) BOOL:
    (
+      # If processing photos, completely ignore all files with names containing 'thumbnails'. #
+      (trm_pgm = "photo" AND grep in string("thumbnails", s, NIL, NIL) = 0 | ignore);
+
       # Look at the file name after the tree root. #
       STRING after := s[(ELEMS root)+1:];
       IF after /= ""
       THEN
-         # Convert / in the name to +. The output files are to be in a single directory. #
+         # Convert / in the name to k_ds (@ now). The output files are to be in a single directory. #
          STRING after_name := replace_char(after, "/", k_ds, TRUE);
          STRING after_output := html_output+"/"+after_name+".html"; # Output file name. #
 
@@ -296,12 +325,37 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
                STRING new_terminal_output := "";
 
                # Put links to actual terminal files in the last directory file if multi. #
+               # If we are processing photos, try to create a 'CSS light table' instead of simple links. #
+               # This is much more complex. #
                IF multi
                THEN
-                  STRING link := "<a href=""" + external_files_s + """>" + presented_name + "</a><br>";
-                  (append_lines((link), parent_name) /= 0 | ec +:= 1; retval := 6);
-                  new_terminal_output := parent_name;
-                  (verbose | print(("LNK: ", link[:min2int(ELEMS link,50)], "...", new line)))
+                  IF trm_pgm /= "photo"
+                  THEN
+                     STRING link := "<a href=""" + external_files_s + """>" + presented_name + "</a><br>";
+                     (append_lines((link), parent_name) /= 0 | ec +:= 1; retval := 6);
+                     new_terminal_output := parent_name;
+                     (verbose | print(("LNK: ", link[:min2int(ELEMS link,50)], "...", new line)))
+                  ELSE
+                     # Photo case. #
+                     # If this is the first 'link' write to the directory, delete the existing directory #
+                     # and replace it with one containing a header for a CSS thumbnail image grid. #
+                     IF NOT (used_dir_mimics HASELEM parent_name)
+                     THEN
+                        (NOT delete_file(parent_name, FALSE) | 
+                              put(stand error, ("WARNING: Failed to delete ", parent_name, new line)));
+                        STRING new_title := last OF splitpath(parent_name);
+                        (NOT image_thumbnails_header(new_title, parent_name) |
+                              put(stand error, ("WARNING: Failed to create dir mimic ", parent_name, new line)));
+                        used_dir_mimics +:= parent_name
+                     FI;
+
+                     # Add a thumbnail/image description to the CSS light table thing. #
+                     (NOT image_thumbnails_add(external_files_s, parent_name) |
+                           put(stand error, ("WARNING: Failed to add image/thumbnail to light table ", 
+                                             parent_name, new line)));
+                     (verbose | 
+                           print(("TMB: ", external_files_s[:min2int(ELEMS external_files_s,50)], "...", new line)))
+                  FI
 
                # Otherwise, make an HTML file and put a link to the terminal file in it. #
                # Put a link to the newly made file in the parent directory mimic file.#
@@ -362,6 +416,19 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
                         (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8)
                   )
 
+               # Photo file processing. #
+               ELIF trm_pgm = "photo"
+               THEN
+                  STRING photofile_ext := last OF splitext(s);
+                  (NOT multi |
+                        (append_lines(
+                              make_html_header(replace_string(replace_char(after_name,k_ds," ",TRUE),photofile_ext," ",TRUE)), 
+                              new_terminal_output) /= 0 | ec +:= 1; retval := 7);
+                        STRING link := "<a href=""" + external_files_s + """>" + presented_name + "</a><br>";
+                        (append_lines((link), new_terminal_output) /= 0 | ec +:= 1; retval := 6);
+                        (append_lines(("<br><hr><br>"), new_terminal_output) /= 0 | ec +:= 1; retval := 8)
+                  )
+
                # Or run a specified program. #
                ELSE
                   STRING pgm_cmd := trm_pgm + " '" + new_terminal_output + "' '" + external_files_s + "'";
@@ -379,6 +446,8 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
             FI # Parent mimic file exists. #
          FI # Not directory. #
       FI; # File name - root name not empty. #
+
+      ignore:
       FALSE # Keep going. #
    );
 
@@ -423,6 +492,9 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
       IF trm_pgm = "audio" AND multi
       THEN
          audio_multi_play_all(s)
+      ELIF trm_pgm = "photo" AND multi
+      THEN
+         ((used_dir_mimics HASELEM s) | VOID(image_thumbnails_trailer(s)))
       FI;
 
       # End the HTML page. #
@@ -455,10 +527,10 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
          INT start, end;
          IF grep in string("src=", input_line, start, end) = 0
          THEN
-            IF grep in string("external-files2.*\.flac", input_line, start, end) = 0
+            IF grep in string(files+".*\.flac", input_line, start, end) = 0
             THEN
                src_files +:= input_line[start:end]
-            ELIF grep in string("external-files2.*\.mp3", input_line, start, end) = 0
+            ELIF grep in string(files+".*\.mp3", input_line, start, end) = 0
             THEN
                src_files +:= input_line[start:end]
             FI
@@ -508,6 +580,213 @@ PROC file_tree_to_html_links = (STRING file_tree_root, exts, uhtml_output, trm_p
          java_script +:= "</script>";
          (append_lines(string_list_as_array(java_script), s) /= 0 | ec +:= 1; retval := 6)
       FI # More than one audio source file in a terminal directory mimic. #
+   );
+
+   # Output the first part of the CSS for a grid of thumbnail images. #      
+   PROC image_thumbnails_header = (STRING title, STRING outfilename) BOOL:
+   (
+      BOOL retval := TRUE;
+      STRING header1 := replace_string(replace_char(title,k_ds," ",TRUE),".html","",TRUE);
+      FLEX [1:0]STRING header_parts := split_string(trim(header1), " ");
+      STRING header := header_parts[1] + " " +
+                       month_name(string_to_int(header_parts[2])) + " " +
+                       "Week " + strip_leading_zeros(header_parts[3]);
+      REF STRING_LIST s := STRING_LIST_INIT LOC STRING_LIST;
+      s +:= "<!DOCTYPE html>";
+      s +:= "<html lang=""en"">";
+      s +:= "<head>";
+      s +:= "  <meta charset=""UTF-8"">";
+      s +:= "  <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">";
+      s +:= "  <title>" + header +  "</title>";
+      s +:= "  <style>";
+      s +:= "    /* 1. Grid Configuration (Fixed-size Cells) */";
+      s +:= "    .gallery-grid {";
+      s +:= "      display: grid;";
+      s +:= "      /* Adjust '200px' to match your exact pre-computed thumbnail width */";
+      s +:= "      grid-template-columns: repeat(auto-fill, minmax(200px, max-content));";
+      s +:= "      gap: 20px;";
+      s +:= "      justify-content: center;";
+      s +:= "      padding: 20px;";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    /* 2. Grid Item & Fixed Label Layout */";
+      s +:= "    .grid-item {";
+      s +:= "      display: flex;";
+      s +:= "      flex-direction: column;";
+      s +:= "      align-items: center;";
+      s +:= "      width: 200px; /* Forces uniform width matching your thumbnails */";
+      s +:= "      cursor: pointer;";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    .grid-item img {";
+      s +:= "      width: 200px;  /* Match exact pre-computed dimensions */";
+      s +:= "      height: 200px; /* Match exact pre-computed dimensions */";
+      s +:= "      object-fit: cover;";
+      s +:= "      border-radius: 4px;";
+      s +:= "      transition: transform 0.2s ease-in-out;";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    .grid-item:hover img {";
+      s +:= "      transform: scale(1.03); /* Subtle hover visual indicator */";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    .image-label {";
+      s +:= "      margin-top: 8px;";
+      s +:= "      font-family: monospace; /* Monospace guarantees perfect alignment for fixed characters */";
+      s +:= "      font-size: 14px;";
+      s +:= "      color: #333;";
+      s +:= "      text-align: center;";
+      s +:= "      white-space: nowrap;";
+      s +:= "      overflow: hidden;";
+      s +:= "      text-overflow: ellipsis; /* Fallback fallback safety constraint */";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    /* 3. Pure CSS Lightbox Overlay */";
+      s +:= "    .lightbox {";
+      s +:= "      display: none;";
+      s +:= "      position: fixed;";
+      s +:= "      z-index: 1000;";
+      s +:= "      top: 0;";
+      s +:= "      left: 0;";
+      s +:= "      width: 100%;";
+      s +:= "      height: 100%;";
+      s +:= "      background-color: rgba(0, 0, 0, 0.9);";
+      s +:= "      justify-content: center;";
+      s +:= "      align-items: center;";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    .lightbox.active {";
+      s +:= "      display: flex;";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    .lightbox-content {";
+      s +:= "      max-width: 90%;";
+      s +:= "      max-height: 85%;";
+      s +:= "      object-fit: contain;";
+      s +:= "";
+      s +:= "      box-shadow: 0 4px 20px rgba(0,0,0,0.5);";
+      s +:= "    }";
+      s +:= "";
+      s +:= "    .lightbox-close {";
+      s +:= "      position: absolute;";
+      s +:= "      top: 20px;";
+      s +:= "      right: 30px;";
+      s +:= "      color: #fff;";
+      s +:= "      font-size: 40px;";
+      s +:= "      font-weight: bold;";
+      s +:= "      cursor: pointer;";
+      s +:= "      user-select: none;";
+      s +:= "    }";
+      s +:= "  </style>";
+      s +:= "</head>";
+      s +:= "<body>";
+      s +:= "";
+      s +:= "<h1>"+header+"</h1>";
+      s +:= "";
+      s +:= "  <!-- Container where the grid elements are injected -->";
+      s +:= "  <div id=""gallery"" class=""gallery-grid""></div>";
+      s +:= "";
+      s +:= "  <!-- Hidden Lightbox Structure -->";
+      s +:= "  <div id=""lightbox"" class=""lightbox"">";
+      s +:= "    <span class=""lightbox-close"" id=""lightbox-close"">&times;</span>";
+      s +:= "    <img class=""lightbox-content"" id=""lightbox-img"" src="""" alt=""Full size image view"">";
+      s +:= "  </div>";
+      s +:= "";
+      s +:= "  <script>";
+      s +:= "    // 1. Data Structure representing your array";
+      s +:= "    const imageData = [";
+      (append_lines(string_list_as_array(s), outfilename) /= 0 | retval := FALSE);
+      retval
+   );
+
+   # Output the final part of the CSS for a grid of thumbnail images. #      
+   PROC image_thumbnails_trailer = (STRING outfilename) BOOL:
+   (
+      BOOL retval := TRUE;
+      REF STRING_LIST s := STRING_LIST_INIT LOC STRING_LIST;
+      s +:= "];";
+      s +:= "";
+      s +:= "    const galleryContainer = document.getElementById('gallery');";
+      s +:= "    const lightbox = document.getElementById('lightbox');";
+      s +:= "    const lightboxImg = document.getElementById('lightbox-img');";
+      s +:= "    const lightboxClose = document.getElementById('lightbox-close');";
+      s +:= "";
+      s +:= "    // 2. Loop and generate the grid items dynamically";
+      s +:= "    imageData.forEach(item => {";
+      s +:= "      // Enforce label length constraint safely at runtime if needed";
+      s +:= "      const exactLabel = item.label.substring(0, 13).padEnd(13, ' ');";
+      s +:= "";
+      s +:= "      // Create card container";
+      s +:= "      const gridItem = document.createElement('div');";
+      s +:= "      gridItem.classList.add('grid-item');";
+      s +:= "";
+      s +:= "      // Create pre-computed thumbnail img tag";
+      s +:= "      const img = document.createElement('img');";
+      s +:= "      img.src = item.thumb;";
+      s +:= "      img.alt = exactLabel;";
+      s +:= "      img.loading = 'lazy'; // Performance boost for large grids";
+      s +:= "      img.width = 200;      // Hardcoded layout width hints preventing layout shift";
+      s +:= "      img.height = 200;     // Hardcoded layout height hints preventing layout shift";
+      s +:= "";
+      s +:= "      // Create fixed format label text";
+      s +:= "      const labelDiv = document.createElement('div');";
+      s +:= "      labelDiv.classList.add('image-label');";
+      s +:= "      labelDiv.textContent = exactLabel;";
+      s +:= "";
+      s +:= "      // Click event to swap full size image sources and activate lightbox view";
+      s +:= "      gridItem.addEventListener('click', () => {";
+      s +:= "        lightboxImg.src = item.full;";
+      s +:= "        lightbox.classList.add('active');";
+      s +:= "      });";
+      s +:= "";
+      s +:= "      // Assemble card elements";
+      s +:= "      gridItem.appendChild(img);";
+      s +:= "      gridItem.appendChild(labelDiv);";
+      s +:= "      galleryContainer.appendChild(gridItem);";
+      s +:= "    });";
+      s +:= "";
+      s +:= "    // 3. Lightbox Interactivity handlers";
+      s +:= "    const closeLightbox = () => {";
+      s +:= "      lightbox.classList.remove('active');";
+      s +:= "      lightboxImg.src = ''; // Unload target asset to preserve memory overhead";
+      s +:= "    };";
+      s +:= "";
+      s +:= "    lightboxClose.addEventListener('click', closeLightbox);";
+      s +:= "    ";
+      s +:= "    // Also dismiss lightbox when clicking outside the image container boundary";
+      s +:= "    lightbox.addEventListener('click', (e) => {";
+      s +:= "      if (e.target === lightbox) closeLightbox();";
+      s +:= "    });";
+      s +:= "";
+      s +:= "    // Keyboard accessibility support (Escape key close out)";
+      s +:= "    document.addEventListener('keydown', (e) => {";
+      s +:= "      if (e.key === 'Escape' && lightbox.classList.contains('active')) {";
+      s +:= "        closeLightbox();";
+      s +:= "      }";
+      s +:= "    });";
+      s +:= "  </script>";
+      (append_lines(string_list_as_array(s), outfilename) /= 0 | retval := FALSE);
+      retval
+   );
+
+   # Add an image to a grid of thumbnails. #      
+   PROC image_thumbnails_add = (STRING imagefilename, STRING outfilename) BOOL:
+   (
+      BOOL retval := TRUE;
+      REF STRING_LIST s := STRING_LIST_INIT LOC STRING_LIST;
+      STRINGPAIR path_file := splitpath(imagefilename);
+      s +:= "     {thumb: '" + first OF path_file + "thumbnails/" + last OF path_file + "',";
+      s +:= "      full: '" + imagefilename + "',";
+
+      FLEX [1:0]STRING name_parts := split_string(last OF path_file, "_");
+      STRING day_string := add_ordinal_suffix(name_parts[1]);
+      STRING label := strip_leading_zeros(day_string) + " " +
+                      name_parts[2] + ":" + name_parts[3] + ":" + name_parts[4] + " " +
+                      name_parts[5][:2];
+
+      s +:= "      label: '" + label + "'},";
+      (append_lines(string_list_as_array(s), outfilename) /= 0 | retval := FALSE);
+      retval
    );
 
    # Start an index.html file. #

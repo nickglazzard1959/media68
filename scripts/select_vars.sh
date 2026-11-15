@@ -13,6 +13,7 @@ export RADIO68_LISTS="${MEDIA68_HOME}/radio_lists"
 export VIDEO68_MOUNT="/mnt/videolib"
 export AUDIO68_MOUNT="/mnt/audiolib"
 export BOOKS68_MOUNT="/mnt/booklib"
+export PHOTO68_MOUNT="/mnt/photolib"
 #
 # Which program is to be used to view PDF files?
 export BOOKS68_VIEWER="atril"
@@ -23,3 +24,4 @@ export RADIO68_PGM=${MEDIA68_HOME}
 export VIDEO68_PGM=${MEDIA68_HOME}
 export AUDIO68_PGM=${MEDIA68_HOME}
 export BOOKS68_PGM=${MEDIA68_HOME}
+export PHOTO68_PGM=${MEDIA68_HOME}

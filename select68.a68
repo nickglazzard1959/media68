@@ -153,7 +153,7 @@ PROC present_list = (STRING dir, STRING start, BOOL asalphas, INT level) VOID:
                THEN
                   IF image_mode
                   THEN
-                     STRING runcmd := do_what+" -t '"+dir+"'";
+                     STRING runcmd := do_what+" -t '"+escape_quotes(dir)+"'";
                      (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)))
                   ELSE
                      INT start_index := 1;
@@ -163,7 +163,7 @@ PROC present_list = (STRING dir, STRING start, BOOL asalphas, INT level) VOID:
                         STRINGPAIR file_ext := splitext(show_array[i]);
                         IF check_valid(last OF file_ext, accept_exts)
                         THEN
-                           STRING runcmd := do_what+" '"+dir+"/"+show_array[i]+"'";
+                           STRING runcmd := do_what+" '"+escape_quotes(dir)+"/"+escape_quotes(show_array[i])+"'";
                            (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)); break1);
                            (file is regular(abort_flag_file) | break1)
                         FI
@@ -221,7 +221,7 @@ PROC present_list = (STRING dir, STRING start, BOOL asalphas, INT level) VOID:
          STRINGPAIR file_ext := splitext(newdir);
          IF check_valid(last OF file_ext, accept_exts)
          THEN            
-            STRING runcmd := do_what+" '"+newdir+"'";
+            STRING runcmd := do_what+" '"+escape_quotes(newdir)+"'";
             (NOT run_command(runcmd) | put(stand error, ("Failed to run command.", new line)))
          ELSE
             put(stand error, ("File selected has unacceptable extension. Ignored.", new line));

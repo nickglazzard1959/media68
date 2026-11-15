@@ -7,6 +7,7 @@ sudo cp scripts/video68.sh ${BIN_PATH}
 sudo cp scripts/audio68.sh ${BIN_PATH}
 sudo cp scripts/books68.sh ${BIN_PATH}
 sudo cp scripts/radio68.sh ${BIN_PATH}
+sudo cp scripts/photo68.sh ${BIN_PATH}
 sudo cp mpv-run.sh ${BIN_PATH}
 #
 MPV_CONF_DIR="${HOME}/.config/mpv"
